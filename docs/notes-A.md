@@ -27,3 +27,11 @@
 * Session `ip` / per-IP limiter need `ConnectInfo` (see request 1); until then `ip` is NULL and the IP limiter is inactive.
 * Settings PUT is all-or-nothing via up-front validation + snapshot restore (not a single SQL transaction).
 * Admin CRUD of `raw-materials` refuses category changes while the material is used (BOM, product mapping or stock).
+
+## Godowns (0.2-F, A's part)
+* `/api/admin/locations` (src/routes/admin_locations.rs): code (upper-cased, unique, 409 DUPLICATE), kind PLANT|GODOWN, soft delete, TRANSIT never listed/addressable (404).
+  MAIN: any change that would deactivate it, change kind away from PLANT, set is_production_site=false or change its code -> 409 `PROTECTED`.
+  Deactivating a location with stock (qty>0) or an IN_TRANSIT transfer -> 409 `IN_USE` (details: stock_rows, transfers_in_transit). Audited LOCATION_CREATE/UPDATE/DEACTIVATE.
+  Gap: the stock check is not serialised against a concurrent GRN/transfer into that godown (stock::post does not lock the location row).
+* Users: `allowed_location_ids` in create/update/list/get, Me and login response; validated by `admin::common::check_locations` (<=50, active, non-TRANSIT, deduped, share-locked); change audited (before/after).
+* Seed: GDN-NORTH, GDN-CITY, user `store_north` (restricted to GDN-NORTH), godown GRNs with own lots/expiries, 2 RECEIVED transfers (one with a damaged crate) + 1 IN_TRANSIT (marker `seed-demo godown`).
