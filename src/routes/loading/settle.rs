@@ -125,8 +125,7 @@ async fn settle_core(tx: &mut sqlx::PgConnection, st: &AppState, user: &AuthUser
     let cust_ids: Vec<Uuid> = { let mut v: Vec<Uuid> = b.customer_jars.iter().map(|l| l.customer_id).collect(); v.sort(); v.dedup(); v };
     let mut cust_name: HashMap<Uuid, String> = HashMap::new();
     if !cust_ids.is_empty() {
-        // customer rows are locked (sorted) so concurrent settlements/jar flows serialise on their holdings
-        let rows: Vec<(Uuid, String, bool)> = sqlx::query_as("SELECT id, name, is_active FROM customers WHERE id = ANY($1) ORDER BY id FOR UPDATE")
+        let rows: Vec<(Uuid, String, bool)> = sqlx::query_as("SELECT id, name, is_active FROM customers WHERE id = ANY($1)")
             .bind(&cust_ids).fetch_all(&mut *tx).await?;
         for (id, name, active) in rows { if active { cust_name.insert(id, name); } }
         for (i, l) in b.customer_jars.iter().enumerate() {
@@ -173,6 +172,24 @@ async fn settle_core(tx: &mut sqlx::PgConnection, st: &AppState, user: &AuthUser
     let mut jar_empty: BTreeMap<Uuid, i64> = BTreeMap::new();
     let mut jar_scrap: BTreeMap<Uuid, i64> = BTreeMap::new();
     for (pid, name) in &prod_name { labels.insert((*pid, stock::NIL_LOT), format!("{name} (containers)")); }
+    for l in &b.customer_jars {
+        *jar_empty.entry(l.product_id).or_default() += l.empties_collected;
+        *jar_scrap.entry(l.product_id).or_default() += l.damaged;
+    }
+    for (pid, n) in &jar_empty {
+        if *n > 0 { moves.push(Move::new(ItemType::Product, *pid, "JAR_EMPTY", stock::NIL_LOT, Decimal::from(*n), "JAR_RECEIVE")
+            .reference("TRIP", trip_id).by(Some(user.id)).note(format!("empties collected on trip {}", trip.trip_no))); }
+    }
+    for (pid, n) in &jar_scrap {
+        if *n > 0 { moves.push(Move::new(ItemType::Product, *pid, "SCRAP_YARD", stock::NIL_LOT, Decimal::from(*n), "TRIP_DAMAGED")
+            .reference("TRIP", trip_id).by(Some(user.id)).note(format!("damaged empties from customers, trip {}", trip.trip_no))); }
+    }
+    post_moves(tx, moves, &labels, fx).await?;
+
+    // customers last in the lock order (trip -> batches -> stock -> customers): lock their rows (sorted), then check the holdings
+    if !cust_ids.is_empty() {
+        sqlx::query("SELECT id FROM customers WHERE id = ANY($1) ORDER BY id FOR UPDATE").bind(&cust_ids).fetch_all(&mut *tx).await?;
+    }
     let mut ledger_rows: Vec<(Uuid, Uuid, &'static str, i64)> = vec![];
     for l in &b.customer_jars {
         let before: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(delta),0)::bigint FROM jar_ledger WHERE customer_id = $1 AND product_id = $2")
@@ -186,21 +203,9 @@ async fn settle_core(tx: &mut sqlx::PgConnection, st: &AppState, user: &AuthUser
         for (t, d) in [("ISSUE_FILLED", l.delivered), ("RETURN_EMPTY", -l.empties_collected), ("DAMAGED", -l.damaged), ("LOST", -l.lost)] {
             if d != 0 { ledger_rows.push((l.customer_id, l.product_id, t, d)); }
         }
-        *jar_empty.entry(l.product_id).or_default() += l.empties_collected;
-        *jar_scrap.entry(l.product_id).or_default() += l.damaged;
         fx.effects.push(json!({ "item": format!("{cname} · {} (jars at customer)", prod_name[&l.product_id]), "zone": "CUSTOMER",
             "delta": (l.delivered - l.empties_collected - l.damaged - l.lost).to_string(), "after": after.to_string(), "txn_type": "JAR_LEDGER" }));
     }
-    for (pid, n) in &jar_empty {
-        if *n > 0 { moves.push(Move::new(ItemType::Product, *pid, "JAR_EMPTY", stock::NIL_LOT, Decimal::from(*n), "JAR_RECEIVE")
-            .reference("TRIP", trip_id).by(Some(user.id)).note(format!("empties collected on trip {}", trip.trip_no))); }
-    }
-    for (pid, n) in &jar_scrap {
-        if *n > 0 { moves.push(Move::new(ItemType::Product, *pid, "SCRAP_YARD", stock::NIL_LOT, Decimal::from(*n), "TRIP_DAMAGED")
-            .reference("TRIP", trip_id).by(Some(user.id)).note(format!("damaged empties from customers, trip {}", trip.trip_no))); }
-    }
-    post_moves(tx, moves, &labels, fx).await?;
-
     for (cust, prod, t, d) in &ledger_rows {
         sqlx::query("INSERT INTO jar_ledger (customer_id, product_id, txn_type, delta, txn_date, trip_id, note, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)")
             .bind(cust).bind(prod).bind(*t).bind(*d as i32).bind(today).bind(trip_id).bind(format!("trip {}", trip.trip_no)).bind(user.id)

@@ -8,12 +8,14 @@ Files: `src/routes/loading.rs` + `src/routes/loading/{common,trips,gate,settle,d
 1. **`stock::allocate_free_fefo` has a stale-snapshot race.** It reads `reserved` and takes `FOR UPDATE OF b` in ONE statement.
    Under READ COMMITTED a caller that waits on a batch row that was merely *locked* (an adder inserts `trip_items`, it does not
    update the batch row) resumes with its original snapshot and misses the reservation that just committed.
-   *Workaround used here:* `loading::common::prelock_product_batches` locks the candidate rows in a separate prior statement, and every
-   allocation is re-verified after `lock_batches` + `lot_avail` (separate statements = fresh snapshots). C2's jar-counter `issue` and any
-   write-off/scrap code that uses the helper should do the same (or the helper should be split into "lock" + "compute").
-   `tests/loading_concurrency.rs::waiting_adder_*` reproduce the situation deterministically.
+   *What makes loading and dispatch safe here:* after the allocator, every line is **re-verified** with `lock_batches` + `lot_avail`
+   (separate statements = fresh snapshots) and fails with `INSUFFICIENT_STOCK` if the crates are no longer free. `prelock_product_batches`
+   (locking the candidates in a separate prior statement) only reduces false `INSUFFICIENT_STOCK`/mis-allocation across batches.
+   `tests/loading_concurrency.rs::waiting_adder_*` show the module tolerates the situation (they pass with and without the pre-lock, i.e. they
+   prove the re-check, not the helper's defect). **C2's jar-counter `issue` and any write-off/scrap code that uses the helper need the same
+   post-lock re-check** (or the helper should be split into "lock" + "compute").
 2. **Lock order** used by everything in this module: trip row -> batch rows (`expiry_date, created_at, id`, i.e. the allocator's order) ->
-   `qr_crate_sets` (batch `FOR SHARE` first) -> stock balance rows -> `customers` rows (settlement). QC approve/reject (B) must lock the
+   `qr_crate_sets` (batch `FOR SHARE` first) -> stock balance rows -> `customers` rows (settlement locks them last, after its stock moves). QC approve/reject (B) must lock the
    batch row `FOR UPDATE` *before* touching its sets/stock (spec already says so).
 3. **jar_ledger writers (C2)** should `SELECT … FROM customers WHERE id=$1 FOR UPDATE` before checking a customer's holding, as settlement
    does, otherwise "no negative holding" can race between `receive-empties` and a settling trip.
@@ -58,6 +60,7 @@ Files: `src/routes/loading.rs` + `src/routes/loading/{common,trips,gate,settle,d
 * Error envelope: own extractors (`J`, `Q`, `Ids`) so malformed JSON/query/path ids return the standard envelope (400) instead of axum's plain text.
 
 ## Known gaps / not done
+* Dispatch notes (by product/batch) do not touch QR labels: with the QR feature on, AVAILABLE labels of a dispatched batch can outlive the crates; loading by QR re-checks free stock and fails safely (`INSUFFICIENT_STOCK`).
 * No per-user ownership of trips (shared floor) – any user with the `loading` page can act on any trip.
 * Settlement does not compare `empties_collected` with anything physical (nothing to compare with); only holdings can't go negative.
 * `GET` lists are not exposed as CSV. Gate-pass/dispatch/QR sheet are JSON only (UI prints them).
