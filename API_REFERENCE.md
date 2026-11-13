@@ -1,4 +1,4 @@
-# Water Plant ERP – API & Behaviour Contract (v1)
+# Neersagar ERP – API & Behaviour Contract (v1)
 
 This file is the **single source of truth** shared by backend and frontend agents. Backends implement exactly this;
 deviations go in `docs/notes-<owner>.md` and are reconciled by the Lead before the frontends start.
@@ -24,6 +24,7 @@ Schema: `migrations/0001..0010` (Lead-owned). Lead owns 0001-0010 (already appli
 | 409 | `DUPLICATE`, `IN_USE`, `RETRY` | unique violation, referenced row, deadlock-retry |
 | 409 | `INSUFFICIENT_STOCK` | `details:{available,required,zone,…}` (batch creation: `details.shortages[]`) |
 | 409 | `QC_LOCKED` | batch/set is not APPROVED (strict lock) |
+| 409 | `RESERVED_STOCK` | write-off / scrap transfer / negative adjustment / count post / godown transfer would take FG_READY below the crates reserved by open LOADING trips; `details:{batch_id,location_id,reserved,trips:[{trip_no,crates}]}`; never overridable (not by `confirm`, not by Admin) – remove the crates from the trip first |
 | 409 | `CAPACITY_EXCEEDED` | vehicle capacity |
 | 409 | `CONFIRM_REQUIRED`, `IDEMPOTENCY_CONFLICT`, `IN_PROGRESS`, `FEATURE_DISABLED` | see §0.2 |
 | 503 | `UNAVAILABLE` | database/pool unreachable; nothing saved |
@@ -330,3 +331,7 @@ Static files in `./static/`, served by the same origin. **CSP is `script-src 'se
 7. *Numbers*: `inputmode`, min/max/step from the product config, live pallet↔crate helper, and a visible "Check: you entered N crates = P pallets + L loose" echo to catch typos.
 
 Pages: `index.html, login.html, setup.html, dashboard.html, admin.html, profile.html, raw-materials.html, production.html, qc.html, warehouse.html, qr-labels.html, loading.html, jars.html, maintenance.html`. Shared: `css/styles.css`, `js/api.js` (cookie→header, 401→login redirect, error→toast), `js/events.js` (section 15), `js/nav.js`, `js/ui.js`, `js/jsQR.js` (vendored via `npm pack jsqr`), `sw.js`, `manifest.json`.
+
+---------------------------------------------------------------------------------------------------------------------
+## 16. Branding
+Company: **Neersagar** (setting `plant.name`, code `NSG`, editable in Admin → Settings; defaults applied by migration 0020). Every page title is `Neersagar ERP – <Page>`; the PWA is named "Neersagar ERP" (short name "Neersagar"); app bar, login, setup, gate pass, dispatch note, GRN, transfer and write-off printouts show the plant name from `/api/ref/settings.plant_name`.

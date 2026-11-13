@@ -58,7 +58,7 @@ impl Settings {
         let i = |k: &str, d: i64| m.get(k).and_then(Value::as_i64).unwrap_or(d);
         let n = |k: &str, d: i64| m.get(k).and_then(|v| Decimal::from_str(&v.to_string().trim_matches('"').to_string()).ok()).unwrap_or(Decimal::from(d));
         Settings {
-            plant_name: s("plant.name", "Aqua Pure Plant"), plant_code: s("plant.code", "PLT1"), qr_base_url: s("plant.qr_base_url", ""),
+            plant_name: s("plant.name", "Neersagar"), plant_code: s("plant.code", "NSG"), qr_base_url: s("plant.qr_base_url", ""),
             session_ttl_hours: i("auth.session_ttl_hours", 12), session_inactivity_purge_days: i("auth.session_inactivity_purge_days", 7),
             max_failed_logins: i("auth.max_failed_logins", 5), lockout_minutes: i("auth.lockout_minutes", 15),
             burn_rate_lookback_days: i("inventory.burn_rate_lookback_days", 14), safety_stock_days: i("inventory.safety_stock_days", 3),

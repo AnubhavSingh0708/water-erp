@@ -1,5 +1,5 @@
 [Unit]
-Description=Water Plant ERP database backup
+Description=Neersagar ERP database backup
 [Service]
 Type=oneshot
 User=erp
