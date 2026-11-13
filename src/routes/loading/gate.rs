@@ -31,7 +31,7 @@ pub async fn issue(State(st): State<AppState>, user: AuthUser, ids: Ids, Q(dq): 
 
 async fn issue_core(tx: &mut sqlx::PgConnection, st: &AppState, user: &AuthUser, trip_id: Uuid, dry: bool, fx: &mut Fx) -> AppResult<Value> {
     // trip first; the state is read AFTER the lock so a concurrent double submit sees DISPATCHED and fails with INVALID_STATE
-    let trip = lock_trip(tx, trip_id).await?;
+    let trip = lock_trip_for(tx, user, trip_id).await?;
     if trip.status != "LOADING" {
         return Err(invalid_state(format!("Trip {} is {} - a gate pass can only be issued for a trip that is LOADING", trip.trip_no, trip.status), &trip.status));
     }
@@ -79,15 +79,15 @@ async fn issue_core(tx: &mut sqlx::PgConnection, st: &AppState, user: &AuthUser,
     for (bid, (idx, zone, crates)) in &per_batch {
         let b = &batches[*idx];
         let on_hand: rust_decimal::Decimal = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(qty),0) FROM stock_balances WHERE item_type='PRODUCT' AND item_id=$1 AND zone=$2 AND lot_id=$3")
-            .bind(b.product_id).bind(*zone).bind(bid).fetch_one(&mut *tx).await?;
+            "SELECT COALESCE(SUM(qty),0) FROM stock_balances WHERE item_type='PRODUCT' AND item_id=$1 AND zone=$2 AND lot_id=$3 AND location_id=$4")
+            .bind(b.product_id).bind(*zone).bind(bid).bind(trip.location_id).fetch_one(&mut *tx).await?;
         if on_hand < rust_decimal::Decimal::from(*crates) {
             return Err(AppError::conflict_with("INSUFFICIENT_STOCK",
                 format!("Batch {} has only {} crates on hand in {zone} but this trip carries {crates}", b.batch_no, dec_str(on_hand)),
                 json!({ "available": dec_str(on_hand), "required": crates, "batch_id": bid, "batch_no": b.batch_no, "zone": zone })));
         }
         labels.insert((b.product_id, b.id), format!("{} · {}", b.product_name, b.batch_no));
-        moves.push(product_move(b.product_id, zone, b.id, -crates, "GATE_PASS").reference("TRIP", trip_id).by(Some(user.id)).note(format!("gate pass for trip {}", trip.trip_no)));
+        moves.push(product_move(trip.location_id, b.product_id, zone, b.id, -crates, "GATE_PASS").reference("TRIP", trip_id).by(Some(user.id)).note(format!("gate pass for trip {}", trip.trip_no)));
     }
     post_moves(tx, moves, &labels, fx).await?;
     // the number is taken only after every check and stock move succeeded, so failed attempts never leave gaps in the GP series
@@ -116,9 +116,12 @@ async fn issue_core(tx: &mut sqlx::PgConnection, st: &AppState, user: &AuthUser,
 }
 
 /// `GET /trips/{id}/gate-pass` - printable document (DISPATCHED / SETTLED only).
-pub async fn print(State(st): State<AppState>, ids: Ids) -> AppResult<Json<Value>> {
+pub async fn print(State(st): State<AppState>, user: AuthUser, ids: Ids) -> AppResult<Json<Value>> {
     let id = id1(&ids)?;
     let mut conn = st.db.acquire().await?;
+    let (loc, loc_name): (Uuid, String) = sqlx::query_as("SELECT t.location_id, l.name FROM loading_trips t JOIN locations l ON l.id = t.location_id WHERE t.id = $1")
+        .bind(id).fetch_optional(&mut *conn).await?.ok_or_else(|| AppError::not_found("Trip"))?;
+    user.require_location(loc)?;
     let row: Option<(String, Option<String>, Option<chrono::DateTime<Utc>>, Option<String>, String, String, String, String, String, Option<String>, String, Option<String>, String)> =
         sqlx::query_as(
             "SELECT t.trip_no, t.gate_pass_no, t.gate_pass_issued_at, u.full_name, t.status, v.reg_no, v.name, v.driver_phone, t.driver_name,
@@ -136,7 +139,7 @@ pub async fn print(State(st): State<AppState>, ids: Ids) -> AppResult<Json<Value
     let pallets: i64 = items.iter().map(|i| i.pallets.unwrap_or(0) as i64).sum();
     let loose: i64 = items.iter().map(|i| i.loose_crates.unwrap_or(i.crates) as i64).sum();
     Ok(Json(json!({
-        "gate_pass_no": gp_no, "plant_name": st.settings.get().plant_name, "trip_no": trip_no, "status": status,
+        "location_id": loc, "location_name": loc_name, "gate_pass_no": gp_no, "plant_name": st.settings.get().plant_name, "trip_no": trip_no, "status": status,
         "issued_at": issued_at, "issued_by_name": issued_by,
         "vehicle": { "reg_no": reg, "name": vname, "driver_name": if driver.is_empty() { vdriver } else { driver.clone() }, "driver_phone": vphone },
         "route": route, "driver_name": driver, "items": items,
@@ -162,7 +165,7 @@ pub async fn void(State(st): State<AppState>, user: AuthUser, ids: Ids, Q(dq): Q
     let trip_id = id1(&ids)?;
     let mut tx = st.db.begin().await?;
     let mut fx = Fx::default();
-    let trip = lock_trip(&mut tx, trip_id).await?;
+    let trip = lock_trip_for(&mut tx, &user, trip_id).await?;
     if trip.status != "DISPATCHED" {
         let hint = if trip.status == "SETTLED" { " Settled trips cannot be voided - correct the stock with an adjustment." } else { "" };
         return Err(invalid_state(format!("Trip {} is {} - only a DISPATCHED (not yet settled) trip can be voided.{hint}", trip.trip_no, trip.status), &trip.status));
@@ -190,7 +193,7 @@ pub async fn void(State(st): State<AppState>, user: AuthUser, ids: Ids, Q(dq): Q
     for bt in &batches {
         let n = sums[&bt.id];
         labels.insert((bt.product_id, bt.id), format!("{} · {}", bt.product_name, bt.batch_no));
-        moves.push(product_move(bt.product_id, restock_zone(&bt.qc_status), bt.id, n, "GATE_PASS_VOID")
+        moves.push(product_move(trip.location_id, bt.product_id, restock_zone(&bt.qc_status), bt.id, n, "GATE_PASS_VOID")
             .reference("TRIP", trip_id).by(Some(user.id)).expiry(Some(bt.expiry_date)).note(format!("void: {reason}")));
     }
     post_moves(&mut tx, moves, &labels, &mut fx).await?;

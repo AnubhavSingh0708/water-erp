@@ -123,8 +123,8 @@ pub async fn post_moves(tx: &mut PgConnection, mut moves: Vec<Move>, labels: &La
     Ok(())
 }
 
-pub fn product_move(product: Uuid, zone: &'static str, lot: Uuid, delta: i64, txn: &'static str) -> Move {
-    Move::new(ItemType::Product, product, zone, lot, Decimal::from(delta), txn)
+pub fn product_move(location: Uuid, product: Uuid, zone: &'static str, lot: Uuid, delta: i64, txn: &'static str) -> Move {
+    Move::new(ItemType::Product, product, zone, lot, Decimal::from(delta), txn).at(location)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -153,19 +153,6 @@ pub async fn lock_batches(conn: &mut PgConnection, ids: &[Uuid]) -> AppResult<Ve
     Ok(rows)
 }
 
-/// Pre-lock the FEFO candidate batches of a product in a statement of their own *before* calling
-/// `stock::allocate_free_fefo`. Under READ COMMITTED the helper's single statement would otherwise resume after a lock wait
-/// with a stale snapshot and miss reservations committed by the transaction it waited for.
-pub async fn prelock_product_batches(conn: &mut PgConnection, product_id: Uuid) -> AppResult<()> {
-    sqlx::query(
-        "SELECT b.id FROM production_batches b
-         JOIN stock_balances sb ON sb.item_type='PRODUCT' AND sb.item_id=b.product_id AND sb.zone='FG_READY' AND sb.lot_id=b.id
-         WHERE b.product_id = $1 AND b.qc_status = 'APPROVED' AND sb.qty > 0
-         ORDER BY b.expiry_date ASC, b.created_at ASC, b.id ASC FOR UPDATE OF b")
-        .bind(product_id).fetch_all(&mut *conn).await?;
-    Ok(())
-}
-
 pub fn qc_locked(b: &BatchRow) -> AppError {
     AppError::conflict_with("QC_LOCKED",
         format!("Batch {} is {} - it is not approved by Lab QC and cannot be loaded or dispatched", b.batch_no, b.qc_status),
@@ -191,14 +178,14 @@ pub struct Avail { pub on_hand: Decimal, pub free: Decimal }
 
 /// On-hand minus crates reserved by LOADING trips (including the caller's own trip) for the lot in its loadable zone.
 /// Call only after the batch row is locked and in a statement of its own.
-pub async fn lot_avail(conn: &mut PgConnection, product_id: Uuid, batch_id: Uuid, zone: &str) -> AppResult<Avail> {
-    let reserved = stock::fg_reserved(&mut *conn, batch_id).await?;
+pub async fn lot_avail(conn: &mut PgConnection, location: Uuid, product_id: Uuid, batch_id: Uuid, zone: &str) -> AppResult<Avail> {
+    let reserved = stock::fg_reserved_at(&mut *conn, location, batch_id).await?;
     let on_hand = if zone == "FG_READY" {
-        stock::fg_free(&mut *conn, product_id, batch_id).await? + reserved
+        stock::fg_free_at(&mut *conn, location, product_id, batch_id).await? + reserved
     } else {
         sqlx::query_scalar::<_, Decimal>(
-            "SELECT COALESCE(SUM(qty),0) FROM stock_balances WHERE item_type='PRODUCT' AND item_id=$1 AND zone=$2 AND lot_id=$3")
-            .bind(product_id).bind(zone).bind(batch_id).fetch_one(&mut *conn).await?
+            "SELECT COALESCE(SUM(qty),0) FROM stock_balances WHERE item_type='PRODUCT' AND item_id=$1 AND zone=$2 AND lot_id=$3 AND location_id=$4")
+            .bind(product_id).bind(zone).bind(batch_id).bind(location).fetch_one(&mut *conn).await?
     };
     Ok(Avail { on_hand, free: on_hand - reserved })
 }
@@ -241,13 +228,26 @@ pub struct TripLock {
     pub capacity_crates: i32,
     pub gate_pass_no: Option<String>,
     pub gate_pass_issued_at: Option<DateTime<Utc>>,
+    pub location_id: Uuid,
 }
 
 /// Lock the trip row (`FOR UPDATE`) and return its *current* state. Every state-changing trip flow starts here.
 pub async fn lock_trip(conn: &mut PgConnection, id: Uuid) -> AppResult<TripLock> {
     sqlx::query_as::<_, TripLock>(
-        "SELECT id, trip_no, status, vehicle_id, capacity_crates, gate_pass_no, gate_pass_issued_at FROM loading_trips WHERE id = $1 FOR UPDATE")
+        "SELECT id, trip_no, status, vehicle_id, capacity_crates, gate_pass_no, gate_pass_issued_at, location_id FROM loading_trips WHERE id = $1 FOR UPDATE")
         .bind(id).fetch_optional(&mut *conn).await?.ok_or_else(|| AppError::not_found("Trip"))
+}
+
+/// Lock the trip and require that the caller may use the trip's source godown (403 otherwise).
+pub async fn lock_trip_for(conn: &mut PgConnection, user: &crate::auth::AuthUser, id: Uuid) -> AppResult<TripLock> {
+    let t = lock_trip(conn, id).await?;
+    user.require_location(t.location_id)?;
+    Ok(t)
+}
+
+/// Godowns the caller is restricted to (`None` = all).
+pub fn location_scope(user: &crate::auth::AuthUser) -> Option<Vec<Uuid>> {
+    if user.is_admin || user.allowed_location_ids.is_empty() { None } else { Some(user.allowed_location_ids.clone()) }
 }
 
 pub fn invalid_state(msg: impl Into<String>, status: &str) -> AppError {
@@ -316,19 +316,26 @@ pub struct TripRow {
     pub notes: String,
     pub void_reason: Option<String>,
     pub voided_at: Option<DateTime<Utc>>,
+    pub location_id: Uuid,
+    pub location_name: String,
 }
 
 pub const TRIP_SELECT: &str =
     "SELECT t.id, t.trip_no, t.status, t.vehicle_id, v.reg_no AS vehicle_reg, t.route_id, r.name AS route_name, t.driver_name, t.capacity_crates,
             COALESCE((SELECT SUM(ti.crates) FROM trip_items ti WHERE ti.trip_id = t.id), 0)::bigint AS loaded_crates,
-            t.gate_pass_no, t.gate_pass_issued_at, t.created_at, t.settled_at, t.notes, t.void_reason, t.voided_at
-     FROM loading_trips t JOIN vehicles v ON v.id = t.vehicle_id LEFT JOIN routes r ON r.id = t.route_id";
+            t.gate_pass_no, t.gate_pass_issued_at, t.created_at, t.settled_at, t.notes, t.void_reason, t.voided_at, t.location_id, l.name AS location_name
+     FROM loading_trips t JOIN vehicles v ON v.id = t.vehicle_id JOIN locations l ON l.id = t.location_id LEFT JOIN routes r ON r.id = t.route_id";
 
 pub fn trip_value(t: &TripRow) -> Value {
     let mut v = serde_json::to_value(t).unwrap_or(Value::Null);
     let pct = if t.capacity_crates > 0 { (t.loaded_crates * 100) / t.capacity_crates as i64 } else { 0 };
     v["fill_pct"] = json!(pct);
     v
+}
+
+/// Name of a godown (for responses).
+pub async fn location_name(conn: &mut PgConnection, id: Uuid) -> AppResult<String> {
+    Ok(sqlx::query_scalar("SELECT name FROM locations WHERE id = $1").bind(id).fetch_optional(&mut *conn).await?.unwrap_or_default())
 }
 
 pub async fn trip_json(conn: &mut PgConnection, id: Uuid, with_items: bool) -> AppResult<Value> {

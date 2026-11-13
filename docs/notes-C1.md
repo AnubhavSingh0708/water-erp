@@ -65,3 +65,11 @@ Files: `src/routes/loading.rs` + `src/routes/loading/{common,trips,gate,settle,d
 * Settlement does not compare `empties_collected` with anything physical (nothing to compare with); only holdings can't go negative.
 * `GET` lists are not exposed as CSV. Gate-pass/dispatch/QR sheet are JSON only (UI prints them).
 * Jar-ledger `txn_date` is `plant_today`; no `updated_at` on trips.
+
+## Godowns (API_REFERENCE §0.2-F)
+* Trips carry `location_id` (source godown; body of `POST /trips`, resolved with `util::resolve_location`; immutable, no endpoint changes it) and responses add `location_id` + `location_name`
+  (trips, gate pass print, availability rows, dispatch notes). Availability takes `?location_id=` (default: the trip's godown when `?trip_id=` is given, else the caller's default).
+* Every stock read/write is per godown: `allocate_free_fefo_at`, `fg_*_at`, `Move::at(trip.location_id)`; settlement restock/scrap/`JAR_EMPTY` and fleet events (`location_id`) land in the trip's godown; dispatch notes
+  take `location_id` in the body (same resolution), void restocks the note's godown. Reservations are per godown (`t.location_id`).
+* Access: any action on a trip/note of a godown the caller may not use is `403` (authorisation runs before body validation); lists and `/summary` silently filter to the caller's godowns; explicit foreign `location_id` is 403.
+* The local `prelock_product_batches` workaround was removed (the shared allocator now locks first, then computes); the post-lock re-check stays.
