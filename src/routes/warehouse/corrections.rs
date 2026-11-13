@@ -57,7 +57,10 @@ async fn check_lot(tx: &mut PgConnection, c: &ItemCtx, zone: &str, lot: Uuid, po
     match c.kind {
         ItemKind::Raw => {
             if lot.is_nil() { return Ok(None); }
+            // a lot is known when it is a GRN line of this material, or already held (in any zone) by this material (seeded/opening stock)
             let r: Option<Option<NaiveDate>> = sqlx::query_scalar("SELECT expiry_date FROM grn_lines WHERE id=$1 AND raw_material_id=$2").bind(lot).bind(c.id).fetch_optional(&mut *tx).await?;
+            if let Some(e) = r { return Ok(e); }
+            let r: Option<Option<NaiveDate>> = sqlx::query_scalar("SELECT expiry_date FROM stock_balances WHERE item_type='RAW' AND item_id=$1 AND lot_id=$2 LIMIT 1").bind(c.id).bind(lot).fetch_optional(&mut *tx).await?;
             Ok(r.ok_or_else(|| AppError::field("lot_id", "unknown lot for this material"))?)
         }
         ItemKind::Product => {

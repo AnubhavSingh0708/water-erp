@@ -1,13 +1,16 @@
 //! `/api/dashboard` – KPI tiles and short lists (OWNER B, page `dashboard`). Read-only.
-use crate::{error::AppResult, routes::ref_data::bh::{self, batch_j, Arg}, state::AppState};
+use crate::{alerts, auth::AuthUser, error::AppResult, routes::ref_data::bh::{self, batch_j, Arg}, state::AppState};
 use axum::{extract::State, routing::get, Json, Router};
 use serde_json::{json, Value};
 
 pub fn router() -> Router<AppState> { Router::new().route("/", get(dashboard)) }
 
-async fn dashboard(State(s): State<AppState>) -> AppResult<Json<Value>> {
+async fn dashboard(State(s): State<AppState>, user: AuthUser) -> AppResult<Json<Value>> {
+    let can = |pages: &[&str]| pages.iter().any(|p| user.can_access(p));
+    let may = |ev: &str| alerts::user_may_receive(user.is_admin, &user.allowed_pages, ev);
+    let visible_events: Vec<String> = alerts::EVENT_TYPES.iter().filter(|(c, _)| may(c)).map(|(c, _)| c.to_string()).collect();
     let burn_days = s.settings.get().burn_rate_lookback_days.max(1);
-    let kpis = bh::jval(&s.db,
+    let mut kpis = bh::jval(&s.db,
         "WITH rm AS (SELECT m.id, m.min_stock, COALESCE((SELECT SUM(qty) FROM stock_balances sb WHERE sb.item_type='RAW' AND sb.item_id=m.id AND sb.zone='RM_STORE'),0) AS q
                      FROM raw_materials m WHERE m.is_active AND m.category <> 'EMPTY_BOTTLE')
          SELECT jsonb_build_object(
@@ -44,6 +47,20 @@ async fn dashboard(State(s): State<AppState>) -> AppResult<Json<Value>> {
         "SELECT COALESCE(jsonb_agg(j ORDER BY ca DESC), '[]'::jsonb) FROM (
            SELECT jsonb_build_object('id', a.id, 'event_type', a.event_type, 'severity', a.severity, 'title', a.title, 'body', a.body, 'url', a.url,
                   'created_at', a.created_at, 'resolved', a.resolved_at IS NOT NULL) AS j, a.created_at AS ca
-           FROM alerts a ORDER BY a.created_at DESC LIMIT 10) q", &[]).await?;
+           FROM alerts a WHERE a.event_type = ANY($1) ORDER BY a.created_at DESC LIMIT 10) q", &[Arg::TA(visible_events)]).await?;
+    // numbers of pages the caller cannot open are hidden (null), as are the matching lists
+    let hide = |k: &mut Value, key: &str, ok: bool| { if !ok { k[key] = Value::Null; } };
+    hide(&mut kpis, "low_stock_count", can(&["raw-materials"]));
+    hide(&mut kpis, "open_reorders", can(&["raw-materials"]));
+    hide(&mut kpis, "batches_in_quarantine", can(&["qc", "production"]));
+    hide(&mut kpis, "fg_ready_crates", can(&["warehouse"]));
+    hide(&mut kpis, "trips_on_road", can(&["loading"]));
+    hide(&mut kpis, "jars_overdue", may("JAR_OVERDUE"));
+    hide(&mut kpis, "maintenance_due", may("MAINTENANCE_DUE"));
+    hide(&mut kpis, "water_log_overdue", can(&["production"]));
+    let empty = || json!([]);
+    let pending_qc = if can(&["qc", "production"]) { pending_qc } else { empty() };
+    let low_stock = if can(&["raw-materials"]) { low_stock } else { empty() };
+    let active_trips = if can(&["loading"]) { active_trips } else { empty() };
     Ok(Json(json!({ "kpis": kpis, "pending_qc": pending_qc, "low_stock": low_stock, "active_trips": active_trips, "recent_alerts": recent_alerts })))
 }

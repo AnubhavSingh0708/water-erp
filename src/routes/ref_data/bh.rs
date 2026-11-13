@@ -124,7 +124,7 @@ pub fn check_entry_date(field: &str, d: NaiveDate, today: NaiveDate, max_back_da
 // Parameterised JSON queries. SQL text is `&'static str` so user input can never be formatted into it.
 // ------------------------------------------------------------------------------------------------------------------
 #[derive(Clone, Debug)]
-pub enum Arg { T(Option<String>), U(Option<Uuid>), D(Option<NaiveDate>), I(i64), B(bool), N(Option<Decimal>) }
+pub enum Arg { TA(Vec<String>), T(Option<String>), U(Option<Uuid>), D(Option<NaiveDate>), I(i64), B(bool), N(Option<Decimal>) }
 impl Arg {
     pub fn t(v: &Option<String>) -> Arg { Arg::T(v.clone()) }
     pub fn like(v: &Option<String>) -> Arg {
@@ -136,7 +136,7 @@ pub async fn jval<'e>(db: impl PgExecutor<'e>, sql: &str, args: &[Arg]) -> AppRe
     let mut q = sqlx::query_scalar::<_, Value>(sql);
     for a in args {
         q = match a {
-            Arg::T(v) => q.bind(v.clone()), Arg::U(v) => q.bind(*v), Arg::D(v) => q.bind(*v),
+            Arg::TA(v) => q.bind(v.clone()), Arg::T(v) => q.bind(v.clone()), Arg::U(v) => q.bind(*v), Arg::D(v) => q.bind(*v),
             Arg::I(v) => q.bind(*v), Arg::B(v) => q.bind(*v), Arg::N(v) => q.bind(*v),
         };
     }
