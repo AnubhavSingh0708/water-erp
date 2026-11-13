@@ -1,0 +1,55 @@
+[package]
+name = "water-erp"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+default-run = "water-erp"
+
+[workspace]
+members = ["."]
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["macros"] }
+axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pemfile = "2"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "compression-gzip", "cors", "set-header", "timeout"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "macros", "rust_decimal", "json", "chrono", "uuid", "derive"] }
+rust_decimal = { version = "1", features = ["db-postgres"] }
+rust_decimal_macros = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+clap = { version = "4", features = ["derive", "env"] }
+argon2 = "0.5"
+sha2 = "0.10"
+rand = "0.8"
+hex = "0.4"
+base64 = "0.22"
+web-push-native = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+qrcode-generator = "5"
+rcgen = "0.13"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "1"
+anyhow = "1"
+futures = "0.3"
+http = "1"
+async-trait = "0.1"
+time = "0.3"
+local-ip-address = "0.6"
+p256 = { version = "0.13", features = ["ecdsa", "pem"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+# faster password hashing in debug builds / tests
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3

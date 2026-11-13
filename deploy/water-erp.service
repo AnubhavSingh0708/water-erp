@@ -1,0 +1,41 @@
+[Unit]
+Description=Neersagar ERP
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=erp
+Group=erp
+WorkingDirectory=/opt/water-erp
+EnvironmentFile=/etc/water-erp/env
+# Mode, domain, TLS paths etc. come from the env file (ERP_MODE, ERP_DOMAIN, ERP_TLS_CERT, ...). See deploy/env.example.
+ExecStart=/opt/water-erp/water-erp
+# Graceful shutdown: SIGTERM -> /api/health turns 503, live streams are told to reconnect, in-flight requests finish (<= 25 s),
+# then the DB pool is closed. TimeoutStopSec must exceed that.
+KillSignal=SIGTERM
+TimeoutStopSec=40
+Restart=on-failure
+RestartSec=3
+# Binding 443 without root:
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/water-erp
+# local-mode self-signed certificates are stored here (ERP_DATA_DIR)
+StateDirectory=water-erp
+
+[Install]
+WantedBy=multi-user.target
