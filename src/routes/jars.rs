@@ -95,17 +95,40 @@ async fn holding(conn: &mut PgConnection, customer: Uuid, product: Uuid) -> AppR
         .bind(customer).bind(product).fetch_one(&mut *conn).await?)
 }
 
-async fn zone_qty(conn: &mut PgConnection, product: Uuid, zone: &str) -> AppResult<i64> {
-    let d = stock::available(conn, ItemType::Product, product, zone).await?;
+async fn zone_qty(conn: &mut PgConnection, loc: Uuid, product: Uuid, zone: &str) -> AppResult<i64> {
+    let d = stock::available_at(conn, loc, ItemType::Product, product, zone).await?;
     Ok(d.to_i64().unwrap_or(0))
+}
+
+/// Godowns the caller may use (active, never TRANSIT), main plant first.
+pub async fn allowed_locations(conn: &mut PgConnection, user: &AuthUser) -> AppResult<Vec<(Uuid, String)>> {
+    let rows: Vec<(Uuid, String)> = sqlx::query_as("SELECT id, name FROM locations WHERE is_active AND kind <> 'TRANSIT' ORDER BY (kind = 'PLANT') DESC, name, id")
+        .fetch_all(&mut *conn).await?;
+    Ok(rows.into_iter().filter(|(id, _)| user.can_use_location(*id)).collect())
+}
+
+/// Which godown(s) a read covers: one resolved godown, or `location_id=all` = every godown the caller may use.
+pub enum Scope { One(Uuid), All(Vec<Uuid>) }
+impl Scope {
+    pub fn ids(&self) -> Vec<Uuid> { match self { Scope::One(i) => vec![*i], Scope::All(v) => v.clone() } }
+    fn label(&self) -> Value { match self { Scope::One(i) => json!(i), Scope::All(_) => json!("all") } }
+}
+pub async fn read_scope(conn: &mut PgConnection, user: &AuthUser, raw: &Option<String>) -> AppResult<Scope> {
+    match raw.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some("all") => Ok(Scope::All(allowed_locations(conn, user).await?.into_iter().map(|l| l.0).collect())),
+        _ => {
+            let id = opt_uuid("location_id", raw)?;
+            Ok(Scope::One(util::resolve_location(conn, user, id).await?))
+        }
+    }
 }
 
 fn fmt4(n: i64) -> String { format!("{n}.0000") }
 fn fmt2(d: Decimal) -> String { format!("{:.2}", d.round_dp(2)) }
 
-async fn stock_fx(conn: &mut PgConnection, p: &ReturnableProduct, zone: &'static str, delta: i64) -> AppResult<Value> {
-    let after = zone_qty(conn, p.id, zone).await?;
-    Ok(json!({ "item": p.name, "zone": zone, "delta": fmt4(delta), "after": fmt4(after) }))
+async fn stock_fx(conn: &mut PgConnection, loc: Uuid, p: &ReturnableProduct, zone: &'static str, delta: i64) -> AppResult<Value> {
+    let after = zone_qty(conn, loc, p.id, zone).await?;
+    Ok(json!({ "item": p.name, "zone": zone, "location_id": loc, "delta": fmt4(delta), "after": fmt4(after) }))
 }
 
 fn customer_fx(name: &str, p: &ReturnableProduct, delta: i64, after: i64) -> Value {
@@ -115,11 +138,11 @@ fn customer_fx(name: &str, p: &ReturnableProduct, delta: i64, after: i64) -> Val
 /// Record a fleet event (the CHECK constraint ties `reason_code` to DESTROYED).
 #[allow(clippy::too_many_arguments)]
 async fn fleet_event(conn: &mut PgConnection, product: Uuid, kind: &str, qty: i64, reason: Option<&str>, location: Option<&str>,
-                     customer: Option<Uuid>, supplier: Option<Uuid>, note: &str, user: &AuthUser) -> AppResult<Uuid> {
+                     customer: Option<Uuid>, supplier: Option<Uuid>, note: &str, user: &AuthUser, loc: Uuid) -> AppResult<Uuid> {
     Ok(sqlx::query_scalar(
-        "INSERT INTO jar_fleet_events (product_id, event_type, qty, reason_code, location, customer_id, supplier_id, note, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id")
-        .bind(product).bind(kind).bind(qty as i32).bind(reason).bind(location).bind(customer).bind(supplier).bind(note).bind(user.id)
+        "INSERT INTO jar_fleet_events (product_id, event_type, qty, reason_code, location, customer_id, supplier_id, note, created_by, location_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id")
+        .bind(product).bind(kind).bind(qty as i32).bind(reason).bind(location).bind(customer).bind(supplier).bind(note).bind(user.id).bind(loc)
         .fetch_one(&mut *conn).await?)
 }
 
@@ -170,9 +193,10 @@ impl FleetCounts {
     }
 }
 
-pub async fn fleet_counts(conn: &mut PgConnection, product: Uuid) -> AppResult<FleetCounts> {
-    let rows = sqlx::query("SELECT zone, COALESCE(SUM(qty), 0) AS q FROM stock_balances WHERE item_type = 'PRODUCT' AND item_id = $1 GROUP BY zone")
-        .bind(product).fetch_all(&mut *conn).await?;
+/// Plant-side counts for the given godowns (`None` = every location incl. TRANSIT = the whole fleet). Customer holdings are global.
+pub async fn fleet_counts(conn: &mut PgConnection, product: Uuid, locs: Option<&[Uuid]>) -> AppResult<FleetCounts> {
+    let rows = sqlx::query("SELECT zone, COALESCE(SUM(qty), 0) AS q FROM stock_balances WHERE item_type = 'PRODUCT' AND item_id = $1 AND ($2::uuid[] IS NULL OR location_id = ANY($2)) GROUP BY zone")
+        .bind(product).bind(locs).fetch_all(&mut *conn).await?;
     let mut c = FleetCounts::default();
     for r in rows {
         let q = r.get::<Decimal, _>("q").to_i64().unwrap_or(0);
@@ -186,8 +210,9 @@ pub async fn fleet_counts(conn: &mut PgConnection, product: Uuid) -> AppResult<F
     }
     c.with_customers = sqlx::query_scalar("SELECT COALESCE(SUM(delta), 0)::bigint FROM jar_ledger WHERE product_id = $1").bind(product).fetch_one(&mut *conn).await?;
     c.in_vehicles = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(ti.crates), 0)::bigint FROM trip_items ti JOIN loading_trips t ON t.id = ti.trip_id WHERE t.status = 'DISPATCHED' AND ti.product_id = $1")
-        .bind(product).fetch_one(&mut *conn).await?;
+        "SELECT COALESCE(SUM(ti.crates), 0)::bigint FROM trip_items ti JOIN loading_trips t ON t.id = ti.trip_id
+         WHERE t.status = 'DISPATCHED' AND ti.product_id = $1 AND ($2::uuid[] IS NULL OR t.location_id = ANY($2))")
+        .bind(product).bind(locs).fetch_one(&mut *conn).await?;
     Ok(c)
 }
 
@@ -198,11 +223,11 @@ pub struct PeriodStats {
 }
 
 /// Activity between two plant-local dates (inclusive).
-pub async fn period_stats(conn: &mut PgConnection, product: Uuid, from: NaiveDate, to: NaiveDate, offset_min: i64) -> AppResult<PeriodStats> {
+pub async fn period_stats(conn: &mut PgConnection, product: Uuid, from: NaiveDate, to: NaiveDate, offset_min: i64, locs: Option<&[Uuid]>) -> AppResult<PeriodStats> {
     let mut s = PeriodStats::default();
     for r in DESTROY_REASONS { s.destroyed_by_reason.insert((*r).to_string(), 0); }
-    s.fills = sqlx::query_scalar("SELECT COALESCE(SUM(crates), 0)::bigint FROM production_batches WHERE product_id = $1 AND produced_on BETWEEN $2 AND $3")
-        .bind(product).bind(from).bind(to).fetch_one(&mut *conn).await?;
+    s.fills = sqlx::query_scalar("SELECT COALESCE(SUM(crates), 0)::bigint FROM production_batches WHERE product_id = $1 AND produced_on BETWEEN $2 AND $3 AND ($4::uuid[] IS NULL OR location_id = ANY($4))")
+        .bind(product).bind(from).bind(to).bind(locs).fetch_one(&mut *conn).await?;
     let l = sqlx::query(
         "SELECT COALESCE(SUM(delta) FILTER (WHERE txn_type = 'ISSUE_FILLED'), 0)::bigint AS delivered,
                 COALESCE(-SUM(delta) FILTER (WHERE txn_type = 'RETURN_EMPTY'), 0)::bigint AS returned
@@ -212,8 +237,9 @@ pub async fn period_stats(conn: &mut PgConnection, product: Uuid, from: NaiveDat
     s.empties_returned = l.get("returned");
     let ev = sqlx::query(
         "SELECT event_type, reason_code, COALESCE(SUM(qty), 0)::bigint AS q FROM jar_fleet_events
-         WHERE product_id = $1 AND (created_at + ($4::int * interval '1 minute'))::date BETWEEN $2 AND $3 GROUP BY event_type, reason_code")
-        .bind(product).bind(from).bind(to).bind(offset_min as i32).fetch_all(&mut *conn).await?;
+         WHERE product_id = $1 AND (created_at + ($4::int * interval '1 minute'))::date BETWEEN $2 AND $3
+           AND ($5::uuid[] IS NULL OR COALESCE(location_id, '00000000-0000-0000-0000-000000000001') = ANY($5)) GROUP BY event_type, reason_code")
+        .bind(product).bind(from).bind(to).bind(offset_min as i32).bind(locs).fetch_all(&mut *conn).await?;
     for r in ev {
         let q: i64 = r.get("q");
         match r.get::<String, _>("event_type").as_str() {
@@ -234,6 +260,8 @@ pub struct FleetReport {
     pub product: ReturnableProduct, pub from: NaiveDate, pub to: NaiveDate,
     pub counts: FleetCounts, pub period: PeriodStats,
     pub lifetime_fills: i64, pub lifetime_destroyed: i64, pub warn_pct: i64,
+    /// whole fleet (all godowns + transit + customers + vehicles): the denominator of the cycle estimate
+    pub global_total: i64,
 }
 
 impl FleetReport {
@@ -244,7 +272,7 @@ impl FleetReport {
     }
     /// Lifetime fills ÷ every container the plant has ever owned (current fleet + lifetime destroyed).
     pub fn avg_cycles(&self) -> Option<Decimal> {
-        let denom = self.counts.total() + self.lifetime_destroyed;
+        let denom = self.global_total + self.lifetime_destroyed;
         if denom <= 0 { return None; }
         Some(Decimal::from(self.lifetime_fills) / Decimal::from(denom))
     }
@@ -284,12 +312,14 @@ impl FleetReport {
     }
 }
 
-pub async fn fleet_report(conn: &mut PgConnection, product: ReturnableProduct, from: NaiveDate, to: NaiveDate, offset_min: i64, warn_pct: i64) -> AppResult<FleetReport> {
-    let counts = fleet_counts(conn, product.id).await?;
-    let period = period_stats(conn, product.id, from, to, offset_min).await?;
+/// `locs = None` => whole plant (used by the alert worker); `Some(godowns)` => counts and period activity of those godowns.
+pub async fn fleet_report(conn: &mut PgConnection, product: ReturnableProduct, from: NaiveDate, to: NaiveDate, offset_min: i64, warn_pct: i64, locs: Option<&[Uuid]>) -> AppResult<FleetReport> {
+    let counts = fleet_counts(conn, product.id, locs).await?;
+    let global_total = if locs.is_none() { counts.total() } else { fleet_counts(conn, product.id, None).await?.total() };
+    let period = period_stats(conn, product.id, from, to, offset_min, locs).await?;
     let lifetime_fills: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(crates), 0)::bigint FROM production_batches WHERE product_id = $1").bind(product.id).fetch_one(&mut *conn).await?;
     let lifetime_destroyed: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(qty), 0)::bigint FROM jar_fleet_events WHERE product_id = $1 AND event_type = 'DESTROYED'").bind(product.id).fetch_one(&mut *conn).await?;
-    Ok(FleetReport { product, from, to, counts, period, lifetime_fills, lifetime_destroyed, warn_pct })
+    Ok(FleetReport { product, from, to, counts, period, lifetime_fills, lifetime_destroyed, warn_pct, global_total })
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -349,28 +379,35 @@ impl Balance {
 // GET endpoints
 // ---------------------------------------------------------------------------------------------------------------
 
-async fn summary(State(s): State<AppState>, _u: AuthUser) -> AppResult<Json<Value>> {
+#[derive(Deserialize, Default)]
+struct SummaryQuery { location_id: Option<String> }
+
+async fn summary(State(s): State<AppState>, u: AuthUser, ApiQuery(q): ApiQuery<SummaryQuery>) -> AppResult<Json<Value>> {
     let mut c = s.db.acquire().await?;
+    let scope = read_scope(&mut c, &u, &q.location_id).await?;
+    let locs = scope.ids();
     let today = util::plant_today(&mut c).await?;
     let st = s.settings.get();
     let mut out = vec![];
     for p in active_returnable_products(&mut c).await? {
-        let f = fleet_counts(&mut c, p.id).await?;
+        let f = fleet_counts(&mut c, p.id, Some(&locs)).await?;
         let overdue = balances(&mut c, Some(p.id), None, None, false, today, st.jar_overdue_days).await?.iter().filter(|b| b.overdue).count();
         out.push(json!({
             "product_id": p.id, "code": p.code, "name": p.name, "size_ml": p.size_ml, "max_cycles": p.max_cycles,
             "plant_empty": f.plant_empty, "plant_clean": f.plant_clean, "filled_ready": f.filled_ready, "filled_quarantine": f.filled_quarantine,
             "with_customers": f.with_customers, "in_vehicles": f.in_vehicles, "fleet_total": f.total(), "overdue_customers": overdue,
+            "location_id": scope.label(),
         }));
     }
     Ok(Json(Value::Array(out)))
 }
 
 #[derive(Deserialize, Default)]
-struct FleetQuery { product_id: Option<String>, from: Option<String>, to: Option<String> }
+struct FleetQuery { product_id: Option<String>, from: Option<String>, to: Option<String>, location_id: Option<String> }
 
-async fn fleet(State(s): State<AppState>, _u: AuthUser, ApiQuery(q): ApiQuery<FleetQuery>) -> AppResult<Json<Value>> {
+async fn fleet(State(s): State<AppState>, u: AuthUser, ApiQuery(q): ApiQuery<FleetQuery>) -> AppResult<Json<Value>> {
     let mut c = s.db.acquire().await?;
+    let scope = read_scope(&mut c, &u, &q.location_id).await?;
     let today = util::plant_today(&mut c).await?;
     let to = opt_date("to", &q.to)?.unwrap_or(today);
     let from = opt_date("from", &q.from)?.unwrap_or(to - chrono::Duration::days(29));
@@ -384,8 +421,25 @@ async fn fleet(State(s): State<AppState>, _u: AuthUser, ApiQuery(q): ApiQuery<Fl
         }
     };
     let st = s.settings.get();
-    let rep = fleet_report(&mut c, product, from, to, st.utc_offset_minutes, st.jar_destroy_warn_pct).await?;
-    Ok(Json(rep.json()))
+    let locs = scope.ids();
+    let pid = product.id;
+    let rep = fleet_report(&mut c, product, from, to, st.utc_offset_minutes, st.jar_destroy_warn_pct, Some(&locs)).await?;
+    let mut out = rep.json();
+    out["location_id"] = scope.label();
+    out["by_location"] = Value::Array(by_location(&mut c, &u, pid).await?);
+    Ok(Json(out))
+}
+
+/// Stock of one product per godown the caller may use (zero rows included so the UI can show every godown).
+async fn by_location(conn: &mut PgConnection, user: &AuthUser, product: Uuid) -> AppResult<Vec<Value>> {
+    let locs = allowed_locations(conn, user).await?;
+    let ids: Vec<Uuid> = locs.iter().map(|l| l.0).collect();
+    let rows = sqlx::query("SELECT location_id, zone, COALESCE(SUM(qty), 0) AS q FROM stock_balances WHERE item_type = 'PRODUCT' AND item_id = $1 AND location_id = ANY($2) GROUP BY location_id, zone")
+        .bind(product).bind(&ids).fetch_all(&mut *conn).await?;
+    Ok(locs.iter().map(|(id, name)| {
+        let q = |zone: &str| -> i64 { rows.iter().filter(|r| r.get::<Uuid, _>("location_id") == *id && r.get::<String, _>("zone") == zone).map(|r| r.get::<Decimal, _>("q").to_i64().unwrap_or(0)).sum() };
+        json!({ "location_id": id, "name": name, "plant_empty": q("JAR_EMPTY"), "plant_clean": q("JAR_CLEAN"), "filled_ready": q("FG_READY"), "filled_quarantine": q("QC_QUARANTINE") })
+    }).collect())
 }
 
 #[derive(Deserialize, Default)]
@@ -445,7 +499,7 @@ async fn destroyed(State(s): State<AppState>, _u: AuthUser, ApiQuery(q): ApiQuer
     const FILTER: &str = "e.event_type = 'DESTROYED' AND ($1::uuid IS NULL OR e.product_id = $1) AND ($2::text IS NULL OR e.reason_code = $2)
         AND ($3::date IS NULL OR (e.created_at + ($5::int * interval '1 minute'))::date >= $3) AND ($4::date IS NULL OR (e.created_at + ($5::int * interval '1 minute'))::date <= $4)";
     let rows = sqlx::query(&format!(
-        "SELECT e.id, e.product_id, p.name AS product_name, e.qty, e.reason_code, e.location, e.customer_id, c.name AS customer_name, e.trip_id, t.trip_no, e.note,
+        "SELECT e.id, e.product_id, e.location_id, p.name AS product_name, e.qty, e.reason_code, e.location, e.customer_id, c.name AS customer_name, e.trip_id, t.trip_no, e.note,
                 e.created_at, u.full_name AS created_by_name
          FROM jar_fleet_events e JOIN products p ON p.id = e.product_id LEFT JOIN customers c ON c.id = e.customer_id
               LEFT JOIN loading_trips t ON t.id = e.trip_id LEFT JOIN users u ON u.id = e.created_by
@@ -455,7 +509,7 @@ async fn destroyed(State(s): State<AppState>, _u: AuthUser, ApiQuery(q): ApiQuer
         .bind(product).bind(reason).bind(from).bind(to).bind(off).fetch_one(&s.db).await?;
     let items: Vec<Value> = rows.iter().map(|r| json!({
         "id": r.get::<Uuid, _>("id"), "product_id": r.get::<Uuid, _>("product_id"), "product_name": r.get::<String, _>("product_name"),
-        "qty": r.get::<i32, _>("qty"), "reason_code": r.get::<Option<String>, _>("reason_code"), "location": r.get::<Option<String>, _>("location"),
+        "location_id": r.get::<Option<Uuid>, _>("location_id"), "qty": r.get::<i32, _>("qty"), "reason_code": r.get::<Option<String>, _>("reason_code"), "location": r.get::<Option<String>, _>("location"),
         "customer_id": r.get::<Option<Uuid>, _>("customer_id"), "customer_name": r.get::<Option<String>, _>("customer_name"),
         "trip_id": r.get::<Option<Uuid>, _>("trip_id"), "trip_no": r.get::<Option<String>, _>("trip_no"), "note": r.get::<String, _>("note"),
         "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"), "created_by_name": r.get::<Option<String>, _>("created_by_name"),
@@ -509,6 +563,7 @@ struct IssueReq {
     customer_id: Uuid, product_id: Uuid,
     #[serde(deserialize_with = "de_int")] qty: i64,
     note: Option<String>,
+    location_id: Option<Uuid>,
     #[serde(default)] confirm: bool,
 }
 
@@ -519,6 +574,7 @@ async fn issue(State(s): State<AppState>, u: AuthUser, uri: Uri, ApiJson(b): Api
     let dry = is_dry_run(&uri);
     let mut tx = s.db.begin().await?;
     let product = load_returnable(&mut tx, b.product_id).await?;
+    let loc = util::resolve_location(&mut tx, &u, b.location_id).await?;
     let cname = load_active_customer(&mut tx, b.customer_id).await?;
     let before = lock_holding(&mut tx, b.customer_id, product.id).await?;
     let today = util::plant_today(&mut tx).await?;
@@ -531,10 +587,10 @@ async fn issue(State(s): State<AppState>, u: AuthUser, uri: Uri, ApiJson(b): Api
     }
     if b.qty >= 100 { warnings.push(format!("{} containers in one counter sale is unusually large.", b.qty)); }
     need_confirm(b.confirm, "Please confirm this counter issue", &warnings)?;
-    let alloc = stock::allocate_free_fefo(&mut tx, product.id, b.qty).await?;
+    let alloc = stock::allocate_free_fefo_at(&mut tx, loc, product.id, b.qty).await?;
     let id = ledger_row(&mut tx, b.customer_id, product.id, "ISSUE_FILLED", b.qty, today, &note, &u).await?;
     let moves: Vec<Move> = alloc.iter().map(|(batch, n)| {
-        Move::new(ItemType::Product, product.id, "FG_READY", *batch, Decimal::from(-*n), "JAR_ISSUE")
+        Move::new(ItemType::Product, product.id, "FG_READY", *batch, Decimal::from(-*n), "JAR_ISSUE").at(loc)
             .reference("JAR_LEDGER", id).by(Some(u.id)).note(format!("counter issue to {cname}"))
     }).collect();
     stock::post_all(&mut tx, moves).await?;
@@ -544,7 +600,7 @@ async fn issue(State(s): State<AppState>, u: AuthUser, uri: Uri, ApiJson(b): Api
         batches.push(json!({ "batch_id": batch, "batch_no": no, "qty": n }));
     }
     audit::log(&mut *tx, Some(&u), "jars.issue", "jar_ledger", Some(id.to_string()), json!({ "customer_id": b.customer_id, "product_id": product.id, "qty": b.qty, "batches": batches })).await;
-    let effects = vec![stock_fx(&mut tx, &product, "FG_READY", -b.qty).await?, customer_fx(&cname, &product, b.qty, before + b.qty)];
+    let effects = vec![stock_fx(&mut tx, loc, &product, "FG_READY", -b.qty).await?, customer_fx(&cname, &product, b.qty, before + b.qty)];
     finish(tx, dry, Done { status: StatusCode::CREATED, body: json!({ "id": id, "customer_id": b.customer_id, "product_id": product.id, "qty": b.qty, "holding": before + b.qty, "batches": batches }), effects, warnings }).await
 }
 
@@ -555,6 +611,7 @@ struct ReceiveEmptiesReq {
     #[serde(default, deserialize_with = "de_int")] qty_good: i64,
     #[serde(default, deserialize_with = "de_int")] qty_damaged: i64,
     note: Option<String>,
+    location_id: Option<Uuid>,
     #[serde(default)] confirm: bool,
 }
 
@@ -568,6 +625,7 @@ async fn receive_empties(State(s): State<AppState>, u: AuthUser, uri: Uri, ApiJs
     let dry = is_dry_run(&uri);
     let mut tx = s.db.begin().await?;
     let product = load_returnable(&mut tx, b.product_id).await?;
+    let loc = util::resolve_location(&mut tx, &u, b.location_id).await?;
     let cname = load_active_customer(&mut tx, b.customer_id).await?;
     let before = lock_holding(&mut tx, b.customer_id, product.id).await?;
     if total > before {
@@ -585,21 +643,21 @@ async fn receive_empties(State(s): State<AppState>, u: AuthUser, uri: Uri, ApiJs
     if b.qty_good > 0 {
         let id = ledger_row(&mut tx, b.customer_id, product.id, "RETURN_EMPTY", -b.qty_good, today, &note, &u).await?;
         last_id = Some(id);
-        moves.push(Move::new(ItemType::Product, product.id, "JAR_EMPTY", NIL_LOT, Decimal::from(b.qty_good), "JAR_RECEIVE").reference("JAR_LEDGER", id).by(Some(u.id)).note(format!("empties from {cname}")));
+        moves.push(Move::new(ItemType::Product, product.id, "JAR_EMPTY", NIL_LOT, Decimal::from(b.qty_good), "JAR_RECEIVE").at(loc).reference("JAR_LEDGER", id).by(Some(u.id)).note(format!("empties from {cname}")));
     }
     let mut event_id = None;
     if b.qty_damaged > 0 {
         let id = ledger_row(&mut tx, b.customer_id, product.id, "DAMAGED", -b.qty_damaged, today, &note, &u).await?;
         last_id = Some(id);
-        moves.push(Move::new(ItemType::Product, product.id, "SCRAP_YARD", NIL_LOT, Decimal::from(b.qty_damaged), "JAR_DAMAGED").reference("JAR_LEDGER", id).by(Some(u.id)).note(format!("damaged return from {cname}")));
-        event_id = Some(fleet_event(&mut tx, product.id, "DESTROYED", b.qty_damaged, Some("DAMAGED_RETURN"), Some("CUSTOMER"), Some(b.customer_id), None, &note, &u).await?);
+        moves.push(Move::new(ItemType::Product, product.id, "SCRAP_YARD", NIL_LOT, Decimal::from(b.qty_damaged), "JAR_DAMAGED").at(loc).reference("JAR_LEDGER", id).by(Some(u.id)).note(format!("damaged return from {cname}")));
+        event_id = Some(fleet_event(&mut tx, product.id, "DESTROYED", b.qty_damaged, Some("DAMAGED_RETURN"), Some("CUSTOMER"), Some(b.customer_id), None, &note, &u, loc).await?);
     }
     stock::post_all(&mut tx, moves).await?;
     audit::log(&mut *tx, Some(&u), "jars.receive_empties", "jar_ledger", last_id.map(|i| i.to_string()),
                json!({ "customer_id": b.customer_id, "product_id": product.id, "good": b.qty_good, "damaged": b.qty_damaged })).await;
     let mut effects = vec![];
-    if b.qty_good > 0 { effects.push(stock_fx(&mut tx, &product, "JAR_EMPTY", b.qty_good).await?); }
-    if b.qty_damaged > 0 { effects.push(stock_fx(&mut tx, &product, "SCRAP_YARD", b.qty_damaged).await?); }
+    if b.qty_good > 0 { effects.push(stock_fx(&mut tx, loc, &product, "JAR_EMPTY", b.qty_good).await?); }
+    if b.qty_damaged > 0 { effects.push(stock_fx(&mut tx, loc, &product, "SCRAP_YARD", b.qty_damaged).await?); }
     effects.push(customer_fx(&cname, &product, -total, before - total));
     finish(tx, dry, Done { status: StatusCode::CREATED,
         body: json!({ "customer_id": b.customer_id, "product_id": product.id, "qty_good": b.qty_good, "qty_damaged": b.qty_damaged, "holding": before - total, "event_id": event_id }),
@@ -613,6 +671,7 @@ struct ReceiveNewReq {
     #[serde(deserialize_with = "de_int")] qty: i64,
     supplier_id: Option<Uuid>,
     note: Option<String>,
+    location_id: Option<Uuid>,
     #[serde(default)] confirm: bool,
 }
 
@@ -623,19 +682,20 @@ async fn receive_new(State(s): State<AppState>, u: AuthUser, uri: Uri, ApiJson(b
     let dry = is_dry_run(&uri);
     let mut tx = s.db.begin().await?;
     let product = load_returnable(&mut tx, b.product_id).await?;
+    let loc = util::resolve_location(&mut tx, &u, b.location_id).await?;
     if let Some(sup) = b.supplier_id {
         let ok: Option<bool> = sqlx::query_scalar("SELECT is_active FROM suppliers WHERE id = $1").bind(sup).fetch_optional(&mut *tx).await?;
         match ok { None => return Err(AppError::field("supplier_id", "unknown supplier")), Some(false) => return Err(AppError::field("supplier_id", "supplier is inactive")), _ => {} }
     }
-    let fleet = fleet_counts(&mut tx, product.id).await?.total();
+    let fleet = fleet_counts(&mut tx, product.id, None).await?.total();
     let mut warnings = vec![];
     if b.qty >= 1000 { warnings.push(format!("{} new containers in one receipt is unusually large.", b.qty)); }
     if fleet > 0 && b.qty * 100 > fleet * 25 { warnings.push(format!("This is more than 25% of the current fleet ({fleet}).")); }
     need_confirm(b.confirm, "Please confirm the new containers", &warnings)?;
-    let event = fleet_event(&mut tx, product.id, "NEW_PURCHASED", b.qty, None, None, None, b.supplier_id, &note, &u).await?;
-    stock::post_all(&mut tx, vec![Move::new(ItemType::Product, product.id, "JAR_EMPTY", NIL_LOT, Decimal::from(b.qty), "JAR_PURCHASE").reference("JAR_EVENT", event).by(Some(u.id)).note(note.clone())]).await?;
+    let event = fleet_event(&mut tx, product.id, "NEW_PURCHASED", b.qty, None, None, None, b.supplier_id, &note, &u, loc).await?;
+    stock::post_all(&mut tx, vec![Move::new(ItemType::Product, product.id, "JAR_EMPTY", NIL_LOT, Decimal::from(b.qty), "JAR_PURCHASE").at(loc).reference("JAR_EVENT", event).by(Some(u.id)).note(note.clone())]).await?;
     audit::log(&mut *tx, Some(&u), "jars.receive_new", "jar_fleet_events", Some(event.to_string()), json!({ "product_id": product.id, "qty": b.qty, "supplier_id": b.supplier_id })).await;
-    let effects = vec![stock_fx(&mut tx, &product, "JAR_EMPTY", b.qty).await?];
+    let effects = vec![stock_fx(&mut tx, loc, &product, "JAR_EMPTY", b.qty).await?];
     finish(tx, dry, Done { status: StatusCode::CREATED, body: json!({ "event_id": event, "product_id": product.id, "qty": b.qty }), effects, warnings }).await
 }
 
@@ -646,6 +706,7 @@ struct WashReq {
     #[serde(deserialize_with = "de_int")] qty: i64,
     #[serde(default, deserialize_with = "de_opt_int")] rejected: Option<i64>,
     note: Option<String>,
+    location_id: Option<Uuid>,
     #[serde(default)] confirm: bool,
 }
 
@@ -661,22 +722,23 @@ async fn wash(State(s): State<AppState>, u: AuthUser, uri: Uri, ApiJson(b): ApiJ
     let dry = is_dry_run(&uri);
     let mut tx = s.db.begin().await?;
     let product = load_returnable(&mut tx, b.product_id).await?;
+    let loc = util::resolve_location(&mut tx, &u, b.location_id).await?;
     let mut warnings = vec![];
     if rejected > 0 && rejected * 100 > s.settings.get().damage_warn_pct * total {
         warnings.push(format!("{rejected} of {total} washed containers were rejected ({}%).", rejected * 100 / total));
     }
     need_confirm(b.confirm, "Please confirm the wash result", &warnings)?;
-    stock::consume_fefo(&mut tx, ItemType::Product, product.id, "JAR_EMPTY", Decimal::from(total), "JAR_WASH", None, None, Some(u.id), "wash line").await?;
+    stock::consume_fefo_at(&mut tx, loc, ItemType::Product, product.id, "JAR_EMPTY", Decimal::from(total), "JAR_WASH", None, None, Some(u.id), "wash line").await?;
     let mut credits = vec![];
-    if b.qty > 0 { credits.push(Move::new(ItemType::Product, product.id, "JAR_CLEAN", NIL_LOT, Decimal::from(b.qty), "JAR_WASH").by(Some(u.id)).note("washed")); }
-    if rejected > 0 { credits.push(Move::new(ItemType::Product, product.id, "SCRAP_YARD", NIL_LOT, Decimal::from(rejected), "JAR_WASH_REJECT").by(Some(u.id)).note("wash reject")); }
+    if b.qty > 0 { credits.push(Move::new(ItemType::Product, product.id, "JAR_CLEAN", NIL_LOT, Decimal::from(b.qty), "JAR_WASH").at(loc).by(Some(u.id)).note("washed")); }
+    if rejected > 0 { credits.push(Move::new(ItemType::Product, product.id, "SCRAP_YARD", NIL_LOT, Decimal::from(rejected), "JAR_WASH_REJECT").at(loc).by(Some(u.id)).note("wash reject")); }
     stock::post_all(&mut tx, credits).await?;
-    let washed_event = if b.qty > 0 { Some(fleet_event(&mut tx, product.id, "WASHED", b.qty, None, None, None, None, &note, &u).await?) } else { None };
-    let reject_event = if rejected > 0 { Some(fleet_event(&mut tx, product.id, "DESTROYED", rejected, Some("WASH_REJECT"), Some("PLANT_EMPTY"), None, None, &note, &u).await?) } else { None };
+    let washed_event = if b.qty > 0 { Some(fleet_event(&mut tx, product.id, "WASHED", b.qty, None, None, None, None, &note, &u, loc).await?) } else { None };
+    let reject_event = if rejected > 0 { Some(fleet_event(&mut tx, product.id, "DESTROYED", rejected, Some("WASH_REJECT"), Some("PLANT_EMPTY"), None, None, &note, &u, loc).await?) } else { None };
     audit::log(&mut *tx, Some(&u), "jars.wash", "jar_fleet_events", washed_event.or(reject_event).map(|i| i.to_string()), json!({ "product_id": product.id, "washed": b.qty, "rejected": rejected })).await;
-    let mut effects = vec![stock_fx(&mut tx, &product, "JAR_EMPTY", -total).await?];
-    if b.qty > 0 { effects.push(stock_fx(&mut tx, &product, "JAR_CLEAN", b.qty).await?); }
-    if rejected > 0 { effects.push(stock_fx(&mut tx, &product, "SCRAP_YARD", rejected).await?); }
+    let mut effects = vec![stock_fx(&mut tx, loc, &product, "JAR_EMPTY", -total).await?];
+    if b.qty > 0 { effects.push(stock_fx(&mut tx, loc, &product, "JAR_CLEAN", b.qty).await?); }
+    if rejected > 0 { effects.push(stock_fx(&mut tx, loc, &product, "SCRAP_YARD", rejected).await?); }
     finish(tx, dry, Done { status: StatusCode::CREATED, body: json!({ "product_id": product.id, "washed": b.qty, "rejected": rejected, "washed_event_id": washed_event, "reject_event_id": reject_event }), effects, warnings }).await
 }
 
@@ -689,6 +751,7 @@ struct DestroyReq {
     customer_id: Option<Uuid>,
     reason_code: String,
     note: String,
+    location_id: Option<Uuid>,
     #[serde(default)] confirm: bool,
 }
 
@@ -708,6 +771,7 @@ async fn destroy(State(s): State<AppState>, u: AuthUser, uri: Uri, ApiJson(b): A
     let dry = is_dry_run(&uri);
     let mut tx = s.db.begin().await?;
     let product = load_returnable(&mut tx, b.product_id).await?;
+    let loc = util::resolve_location(&mut tx, &u, b.location_id).await?;
     let mut effects = vec![];
     let mut cust_name = None;
     let event: Uuid;
@@ -719,18 +783,18 @@ async fn destroy(State(s): State<AppState>, u: AuthUser, uri: Uri, ApiJson(b): A
         need_confirm(b.confirm, "Please confirm this write-off", &[format!("{} containers held by {cname} will be written off as {} and removed from the fleet. This cannot be undone.", b.qty, b.reason_code)])?;
         let today = util::plant_today(&mut tx).await?;
         ledger_row(&mut tx, cid, product.id, "WRITE_OFF", -b.qty, today, &format!("{}: {}", b.reason_code, note), &u).await?;
-        event = fleet_event(&mut tx, product.id, "DESTROYED", b.qty, Some(&b.reason_code), Some(&b.location), b.customer_id, None, &note, &u).await?;
+        event = fleet_event(&mut tx, product.id, "DESTROYED", b.qty, Some(&b.reason_code), Some(&b.location), b.customer_id, None, &note, &u, loc).await?;
         effects.push(customer_fx(&cname, &product, -b.qty, before - b.qty));
         cust_name = Some(cname);
     } else {
         let (zone, label): (&'static str, &str) = if b.location == "PLANT_EMPTY" { ("JAR_EMPTY", "empty") } else { ("JAR_CLEAN", "clean") };
-        let have = zone_qty(&mut tx, product.id, zone).await?;
+        let have = zone_qty(&mut tx, loc, product.id, zone).await?;
         need_confirm(b.confirm, "Please confirm this write-off", &[format!("{} {label} containers will be moved to the scrap yard and removed from the fleet (stock {have} -> {}). This cannot be undone.", b.qty, have - b.qty)])?;
-        event = fleet_event(&mut tx, product.id, "DESTROYED", b.qty, Some(&b.reason_code), Some(&b.location), None, None, &note, &u).await?;
-        stock::consume_fefo(&mut tx, ItemType::Product, product.id, zone, Decimal::from(b.qty), "JAR_DESTROY", Some("JAR_EVENT"), Some(event), Some(u.id), &format!("{}: {}", b.reason_code, note)).await?;
-        stock::post_all(&mut tx, vec![Move::new(ItemType::Product, product.id, "SCRAP_YARD", NIL_LOT, Decimal::from(b.qty), "JAR_DESTROY").reference("JAR_EVENT", event).by(Some(u.id)).note(format!("{}: {}", b.reason_code, note))]).await?;
-        effects.push(stock_fx(&mut tx, &product, zone, -b.qty).await?);
-        effects.push(stock_fx(&mut tx, &product, "SCRAP_YARD", b.qty).await?);
+        event = fleet_event(&mut tx, product.id, "DESTROYED", b.qty, Some(&b.reason_code), Some(&b.location), None, None, &note, &u, loc).await?;
+        stock::consume_fefo_at(&mut tx, loc, ItemType::Product, product.id, zone, Decimal::from(b.qty), "JAR_DESTROY", Some("JAR_EVENT"), Some(event), Some(u.id), &format!("{}: {}", b.reason_code, note)).await?;
+        stock::post_all(&mut tx, vec![Move::new(ItemType::Product, product.id, "SCRAP_YARD", NIL_LOT, Decimal::from(b.qty), "JAR_DESTROY").at(loc).reference("JAR_EVENT", event).by(Some(u.id)).note(format!("{}: {}", b.reason_code, note))]).await?;
+        effects.push(stock_fx(&mut tx, loc, &product, zone, -b.qty).await?);
+        effects.push(stock_fx(&mut tx, loc, &product, "SCRAP_YARD", b.qty).await?);
     }
     audit::log(&mut *tx, Some(&u), "jars.destroy", "jar_fleet_events", Some(event.to_string()),
                json!({ "product_id": product.id, "qty": b.qty, "location": b.location, "reason_code": b.reason_code, "customer_id": b.customer_id, "customer": cust_name, "note": note })).await;

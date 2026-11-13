@@ -1,5 +1,5 @@
 //! Admin: users + sessions (API_REFERENCE §2).
-use super::common::{audit, check_pages, check_password_policy, check_subscriptions, check_username, hash_password, ApiJson, ApiPath, ApiQuery, ClientInfo};
+use super::common::{audit, check_locations, check_pages, check_password_policy, check_subscriptions, check_username, hash_password, ApiJson, ApiPath, ApiQuery, ClientInfo};
 use crate::{auth::AuthUser, error::{AppError, AppResult}, state::AppState, validate};
 use axum::{extract::State, http::StatusCode, routing::{delete, get, post}, Json, Router};
 use chrono::{DateTime, Utc};
@@ -29,6 +29,7 @@ struct UserObj {
     is_active: bool,
     allowed_pages: Value,
     subscribed_notifications: Value,
+    allowed_location_ids: Value,
     failed_login_count: i32,
     locked_until: Option<DateTime<Utc>>,
     is_locked: bool,
@@ -38,7 +39,7 @@ struct UserObj {
     active_sessions: i64,
 }
 
-const USER_SELECT: &str = "SELECT u.id, u.username, u.full_name, u.is_admin, u.is_active, u.allowed_pages, u.subscribed_notifications,
+const USER_SELECT: &str = "SELECT u.id, u.username, u.full_name, u.is_admin, u.is_active, u.allowed_pages, u.subscribed_notifications, u.allowed_location_ids,
         u.failed_login_count, u.locked_until, COALESCE(u.locked_until > now(), false) AS is_locked, u.last_login_at, u.created_at, u.updated_at,
         (SELECT count(*) FROM user_sessions s WHERE s.user_id = u.id AND s.expires_at > now()) AS active_sessions
     FROM users u";
@@ -77,6 +78,7 @@ struct CreateUser {
     #[serde(default)] is_admin: bool,
     #[serde(default)] allowed_pages: Vec<String>,
     #[serde(default)] subscribed_notifications: Vec<String>,
+    #[serde(default)] allowed_location_ids: Vec<Uuid>,
 }
 
 async fn create_user(State(st): State<AppState>, actor: AuthUser, ci: ClientInfo, ApiJson(b): ApiJson<CreateUser>) -> AppResult<(StatusCode, Json<UserObj>)> {
@@ -87,15 +89,16 @@ async fn create_user(State(st): State<AppState>, actor: AuthUser, ci: ClientInfo
     let subs = check_subscriptions("subscribed_notifications", &b.subscribed_notifications)?;
     let hash = hash_password(&b.password).await?;
     let mut tx = st.db.begin().await?;
+    let locs = check_locations(&mut tx, "allowed_location_ids", &b.allowed_location_ids).await?;
     let id: Uuid = match sqlx::query_scalar(
-        "INSERT INTO users (username, full_name, password_hash, is_admin, allowed_pages, subscribed_notifications) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id")
-        .bind(&username).bind(&full_name).bind(&hash).bind(b.is_admin).bind(json!(pages)).bind(json!(subs)).fetch_one(&mut *tx).await {
+        "INSERT INTO users (username, full_name, password_hash, is_admin, allowed_pages, subscribed_notifications, allowed_location_ids) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id")
+        .bind(&username).bind(&full_name).bind(&hash).bind(b.is_admin).bind(json!(pages)).bind(json!(subs)).bind(json!(locs)).fetch_one(&mut *tx).await {
         Ok(id) => id,
         Err(sqlx::Error::Database(d)) if d.code().as_deref() == Some("23505") => return Err(AppError::field("username", "is already taken")),
         Err(e) => return Err(e.into()),
     };
     audit(&mut tx, &actor, &ci, "USER_CREATE", "user", Some(id.to_string()),
-          json!({ "username": username, "is_admin": b.is_admin, "allowed_pages": pages, "subscribed_notifications": subs })).await?;
+          json!({ "username": username, "is_admin": b.is_admin, "allowed_pages": pages, "subscribed_notifications": subs, "allowed_location_ids": locs })).await?;
     let u = fetch_user(&mut tx, id).await?;
     tx.commit().await?;
     Ok((StatusCode::CREATED, Json(u)))
@@ -118,6 +121,7 @@ struct UpdateUser {
     is_active: Option<bool>,
     allowed_pages: Option<Vec<String>>,
     subscribed_notifications: Option<Vec<String>>,
+    allowed_location_ids: Option<Vec<Uuid>>,
 }
 
 async fn update_user(State(st): State<AppState>, actor: AuthUser, ci: ClientInfo, ApiPath(id): ApiPath<Uuid>, ApiJson(b): ApiJson<UpdateUser>) -> AppResult<Json<UserObj>> {
@@ -130,13 +134,15 @@ async fn update_user(State(st): State<AppState>, actor: AuthUser, ci: ClientInfo
     let (peek_admin, peek_active) = peek.ok_or_else(|| AppError::not_found("User"))?;
     if peek_admin && peek_active { sqlx::query("SELECT id FROM users WHERE is_admin AND is_active ORDER BY id FOR UPDATE").execute(&mut *tx).await?; }
     let before = fetch_locked(&mut tx, id).await?;
+    let locs = match b.allowed_location_ids.as_deref() { Some(l) => Some(check_locations(&mut tx, "allowed_location_ids", l).await?), None => None };
     let new_admin = b.is_admin.unwrap_or(before.is_admin);
     let new_active = b.is_active.unwrap_or(before.is_active);
     if before.is_admin && before.is_active && (!new_admin || !new_active) { ensure_not_last_admin(&mut tx, id).await?; }
     sqlx::query("UPDATE users SET full_name = COALESCE($2, full_name), is_admin = $3, is_active = $4,
-                                  allowed_pages = COALESCE($5, allowed_pages), subscribed_notifications = COALESCE($6, subscribed_notifications), updated_at = now()
+                                  allowed_pages = COALESCE($5, allowed_pages), subscribed_notifications = COALESCE($6, subscribed_notifications),
+                                  allowed_location_ids = COALESCE($7, allowed_location_ids), updated_at = now()
                  WHERE id = $1")
-        .bind(id).bind(&full_name).bind(new_admin).bind(new_active).bind(pages.as_ref().map(|p| json!(p))).bind(subs.as_ref().map(|p| json!(p)))
+        .bind(id).bind(&full_name).bind(new_admin).bind(new_active).bind(pages.as_ref().map(|p| json!(p))).bind(subs.as_ref().map(|p| json!(p))).bind(locs.as_ref().map(|p| json!(p)))
         .execute(&mut *tx).await?;
     let mut revoked = 0;
     if before.is_active && !new_active {
@@ -145,21 +151,21 @@ async fn update_user(State(st): State<AppState>, actor: AuthUser, ci: ClientInfo
     let after = fetch_user(&mut tx, id).await?;
     audit(&mut tx, &actor, &ci, "USER_UPDATE", "user", Some(id.to_string()), json!({
         "username": after.username,
-        "before": { "full_name": before.full_name, "is_admin": before.is_admin, "is_active": before.is_active, "allowed_pages": before.allowed_pages, "subscribed_notifications": before.subs },
-        "after": { "full_name": after.full_name, "is_admin": after.is_admin, "is_active": after.is_active, "allowed_pages": after.allowed_pages, "subscribed_notifications": after.subscribed_notifications },
+        "before": { "full_name": before.full_name, "is_admin": before.is_admin, "is_active": before.is_active, "allowed_pages": before.allowed_pages, "subscribed_notifications": before.subs, "allowed_location_ids": before.locs },
+        "after": { "full_name": after.full_name, "is_admin": after.is_admin, "is_active": after.is_active, "allowed_pages": after.allowed_pages, "subscribed_notifications": after.subscribed_notifications, "allowed_location_ids": after.allowed_location_ids },
         "sessions_revoked": revoked,
     })).await?;
     tx.commit().await?;
     Ok(Json(after))
 }
 
-struct Locked { username: String, full_name: String, is_admin: bool, is_active: bool, allowed_pages: Value, subs: Value }
+struct Locked { username: String, full_name: String, is_admin: bool, is_active: bool, allowed_pages: Value, subs: Value, locs: Value }
 async fn fetch_locked(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> AppResult<Locked> {
-    let r: Option<(String, String, bool, bool, Value, Value)> = sqlx::query_as(
-        "SELECT username, full_name, is_admin, is_active, allowed_pages, subscribed_notifications FROM users WHERE id = $1 FOR UPDATE")
+    let r: Option<(String, String, bool, bool, Value, Value, Value)> = sqlx::query_as(
+        "SELECT username, full_name, is_admin, is_active, allowed_pages, subscribed_notifications, allowed_location_ids FROM users WHERE id = $1 FOR UPDATE")
         .bind(id).fetch_optional(&mut **tx).await?;
     let r = r.ok_or_else(|| AppError::not_found("User"))?;
-    Ok(Locked { username: r.0, full_name: r.1, is_admin: r.2, is_active: r.3, allowed_pages: r.4, subs: r.5 })
+    Ok(Locked { username: r.0, full_name: r.1, is_admin: r.2, is_active: r.3, allowed_pages: r.4, subs: r.5, locs: r.6 })
 }
 
 async fn delete_user(State(st): State<AppState>, actor: AuthUser, ci: ClientInfo, ApiPath(id): ApiPath<Uuid>) -> AppResult<StatusCode> {
@@ -232,6 +238,7 @@ struct SessionObj {
     expires_at: DateTime<Utc>,
     user_agent: Option<String>,
     ip: Option<String>,
+    allowed_location_ids: Value,
     is_current: bool,
 }
 
@@ -240,7 +247,7 @@ struct SessionQuery { user_id: Option<Uuid> }
 
 async fn list_sessions(State(st): State<AppState>, actor: AuthUser, ApiQuery(q): ApiQuery<SessionQuery>) -> AppResult<Json<Vec<SessionObj>>> {
     let rows = sqlx::query_as::<_, SessionObj>(
-        "SELECT s.id, s.user_id, u.username, s.created_at, s.last_used_at, s.expires_at, s.user_agent, s.ip, (s.id = $1) AS is_current
+        "SELECT s.id, s.user_id, u.username, s.created_at, s.last_used_at, s.expires_at, s.user_agent, s.ip, u.allowed_location_ids, (s.id = $1) AS is_current
          FROM user_sessions s JOIN users u ON u.id = s.user_id
          WHERE s.expires_at > now() AND ($2::uuid IS NULL OR s.user_id = $2)
          ORDER BY s.last_used_at DESC LIMIT 500")

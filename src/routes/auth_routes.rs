@@ -42,6 +42,7 @@ pub fn me_json(u: &AuthUser) -> Value {
         "id": u.id, "username": u.username, "full_name": u.full_name, "is_admin": u.is_admin,
         "allowed_pages": if u.is_admin { all_pages() } else { u.allowed_pages.clone() },
         "subscribed_notifications": u.subscribed_notifications,
+        "allowed_location_ids": if u.is_admin { Vec::new() } else { u.allowed_location_ids.clone() },
     })
 }
 
@@ -132,7 +133,7 @@ async fn login(State(st): State<AppState>, ci: ClientInfo, ApiJson(b): ApiJson<L
 
     let mut tx = st.db.begin().await?;
     // re-check under the row lock: deactivation / lockout may have happened while we were hashing
-    let u = sqlx::query("SELECT username, full_name, is_admin, is_active, locked_until, allowed_pages, subscribed_notifications FROM users WHERE id = $1 FOR UPDATE")
+    let u = sqlx::query("SELECT username, full_name, is_admin, is_active, locked_until, allowed_pages, subscribed_notifications, allowed_location_ids FROM users WHERE id = $1 FOR UPDATE")
         .bind(uid).fetch_optional(&mut *tx).await?;
     let Some(u) = u else { return Ok(bad_credentials()) };
     if !u.get::<bool, _>("is_active") { return Ok(bad_credentials()); }
@@ -145,7 +146,7 @@ async fn login(State(st): State<AppState>, ci: ClientInfo, ApiJson(b): ApiJson<L
     let me = AuthUser {
         id: uid, username, full_name: u.get("full_name"), is_admin: u.get("is_admin"),
         allowed_pages: json_strings(u.get("allowed_pages")), subscribed_notifications: json_strings(u.get("subscribed_notifications")),
-        allowed_location_ids: vec![], session_id: Uuid::nil(),
+        allowed_location_ids: json_strings(u.get("allowed_location_ids")).iter().filter_map(|x| x.parse().ok()).collect(), session_id: Uuid::nil(),
     };
     Ok(session_response(StatusCode::OK, &key, expires_at, me_json(&me)))
 }

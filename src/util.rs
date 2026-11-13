@@ -31,13 +31,18 @@ pub async fn plant_today(conn: &mut PgConnection) -> AppResult<chrono::NaiveDate
 /// Resolve the godown a request acts on. `requested` = explicit `location_id` from the client.
 /// Omitted => the user's only allowed godown if they are restricted to exactly one, else MAIN.
 /// Always validates: exists, active, not the system TRANSIT location, and the user may use it.
+/// Takes `FOR SHARE` on the location row so that, inside the caller's transaction, a concurrent admin deactivation
+/// (which takes `FOR UPDATE` and then checks for stock) cannot slip in between the check and the stock post.
 pub async fn resolve_location(conn: &mut PgConnection, user: &crate::auth::AuthUser, requested: Option<uuid::Uuid>) -> AppResult<uuid::Uuid> {
     let id = match requested {
         Some(id) => id,
-        None if !user.is_admin && user.allowed_location_ids.len() == 1 => user.allowed_location_ids[0],
+        // restricted user: their only godown; or MAIN if they may use it; otherwise their first allowed godown
+        None if !user.is_admin && !user.allowed_location_ids.is_empty() => {
+            if user.allowed_location_ids.contains(&crate::stock::MAIN_LOCATION) { crate::stock::MAIN_LOCATION } else { user.allowed_location_ids[0] }
+        }
         None => crate::stock::MAIN_LOCATION,
     };
-    let ok: Option<(String, bool)> = sqlx::query_as("SELECT kind, is_active FROM locations WHERE id = $1").bind(id).fetch_optional(&mut *conn).await?;
+    let ok: Option<(String, bool)> = sqlx::query_as("SELECT kind, is_active FROM locations WHERE id = $1 FOR SHARE").bind(id).fetch_optional(&mut *conn).await?;
     match ok {
         Some((kind, true)) if kind != "TRANSIT" => {}
         Some(_) => return Err(AppError::field("location_id", "this godown is inactive or not selectable")),

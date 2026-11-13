@@ -60,10 +60,9 @@ pub async fn settle(State(st): State<AppState>, user: AuthUser, ids: Ids, Q(dq):
 }
 
 async fn settle_core(tx: &mut sqlx::PgConnection, st: &AppState, user: &AuthUser, trip_id: Uuid, b: SettleBody, fx: &mut Fx) -> AppResult<Value> {
+    let trip = lock_trip_for(tx, user, trip_id).await?; // authorisation (godown) before body validation
     validate::max_items("items", b.items.len(), 1000)?;
     if b.customer_jars.len() > 500 { return Err(AppError::field("customer_jars", "at most 500 entries allowed")); }
-
-    let trip = lock_trip(tx, trip_id).await?;
     if trip.status != "DISPATCHED" {
         return Err(invalid_state(format!("Trip {} is {} - only a DISPATCHED trip can be settled", trip.trip_no, trip.status), &trip.status));
     }
@@ -159,11 +158,11 @@ async fn settle_core(tx: &mut sqlx::PgConnection, st: &AppState, user: &AuthUser
         let (_, ret, dmg) = req[&it.id];
         let bt = bmap[&it.batch_id];
         if ret > 0 {
-            moves.push(product_move(it.product_id, restock_zone(&bt.qc_status), it.batch_id, ret, "TRIP_RETURN")
+            moves.push(product_move(trip.location_id, it.product_id, restock_zone(&bt.qc_status), it.batch_id, ret, "TRIP_RETURN")
                 .reference("TRIP", trip_id).by(Some(user.id)).expiry(Some(bt.expiry_date)).note(format!("return from trip {}", trip.trip_no)));
         }
         if dmg > 0 {
-            moves.push(product_move(it.product_id, "SCRAP_YARD", it.batch_id, dmg, "TRIP_DAMAGED")
+            moves.push(product_move(trip.location_id, it.product_id, "SCRAP_YARD", it.batch_id, dmg, "TRIP_DAMAGED")
                 .reference("TRIP", trip_id).by(Some(user.id)).expiry(Some(bt.expiry_date)).note(format!("damaged on trip {}", trip.trip_no)));
         }
     }
@@ -177,11 +176,11 @@ async fn settle_core(tx: &mut sqlx::PgConnection, st: &AppState, user: &AuthUser
         *jar_scrap.entry(l.product_id).or_default() += l.damaged;
     }
     for (pid, n) in &jar_empty {
-        if *n > 0 { moves.push(Move::new(ItemType::Product, *pid, "JAR_EMPTY", stock::NIL_LOT, Decimal::from(*n), "JAR_RECEIVE")
+        if *n > 0 { moves.push(Move::new(ItemType::Product, *pid, "JAR_EMPTY", stock::NIL_LOT, Decimal::from(*n), "JAR_RECEIVE").at(trip.location_id)
             .reference("TRIP", trip_id).by(Some(user.id)).note(format!("empties collected on trip {}", trip.trip_no))); }
     }
     for (pid, n) in &jar_scrap {
-        if *n > 0 { moves.push(Move::new(ItemType::Product, *pid, "SCRAP_YARD", stock::NIL_LOT, Decimal::from(*n), "TRIP_DAMAGED")
+        if *n > 0 { moves.push(Move::new(ItemType::Product, *pid, "SCRAP_YARD", stock::NIL_LOT, Decimal::from(*n), "TRIP_DAMAGED").at(trip.location_id)
             .reference("TRIP", trip_id).by(Some(user.id)).note(format!("damaged empties from customers, trip {}", trip.trip_no))); }
     }
     post_moves(tx, moves, &labels, fx).await?;
@@ -214,11 +213,11 @@ async fn settle_core(tx: &mut sqlx::PgConnection, st: &AppState, user: &AuthUser
     // fleet lifecycle events (aggregate): damaged in the vehicle, damaged/lost at the customer
     for it in &items {
         let dmg = req[&it.id].2;
-        if it.kind == "RETURNABLE" && dmg > 0 { fleet_event(tx, user, it.product_id, dmg, "DAMAGED_RETURN", "VEHICLE", None, trip_id, &trip.trip_no).await?; }
+        if it.kind == "RETURNABLE" && dmg > 0 { fleet_event(tx, user, it.product_id, dmg, "DAMAGED_RETURN", "VEHICLE", None, trip_id, &trip.trip_no, trip.location_id).await?; }
     }
     for l in &b.customer_jars {
-        if l.damaged > 0 { fleet_event(tx, user, l.product_id, l.damaged, "DAMAGED_RETURN", "CUSTOMER", Some(l.customer_id), trip_id, &trip.trip_no).await?; }
-        if l.lost > 0 { fleet_event(tx, user, l.product_id, l.lost, "LOST", "CUSTOMER", Some(l.customer_id), trip_id, &trip.trip_no).await?; }
+        if l.damaged > 0 { fleet_event(tx, user, l.product_id, l.damaged, "DAMAGED_RETURN", "CUSTOMER", Some(l.customer_id), trip_id, &trip.trip_no, trip.location_id).await?; }
+        if l.lost > 0 { fleet_event(tx, user, l.product_id, l.lost, "LOST", "CUSTOMER", Some(l.customer_id), trip_id, &trip.trip_no, trip.location_id).await?; }
     }
 
     for it in &items {
@@ -244,10 +243,10 @@ async fn settle_core(tx: &mut sqlx::PgConnection, st: &AppState, user: &AuthUser
     Ok(out)
 }
 
-async fn fleet_event(tx: &mut sqlx::PgConnection, user: &AuthUser, product: Uuid, qty: i64, reason: &str, location: &str, customer: Option<Uuid>, trip_id: Uuid, trip_no: &str) -> AppResult<()> {
-    sqlx::query("INSERT INTO jar_fleet_events (product_id, event_type, qty, reason_code, location, customer_id, trip_id, note, created_by)
-                 VALUES ($1,'DESTROYED',$2,$3,$4,$5,$6,$7,$8)")
-        .bind(product).bind(qty as i32).bind(reason).bind(location).bind(customer).bind(trip_id).bind(format!("trip {trip_no}")).bind(user.id)
+async fn fleet_event(tx: &mut sqlx::PgConnection, user: &AuthUser, product: Uuid, qty: i64, reason: &str, location: &str, customer: Option<Uuid>, trip_id: Uuid, trip_no: &str, loc_id: Uuid) -> AppResult<()> {
+    sqlx::query("INSERT INTO jar_fleet_events (product_id, event_type, qty, reason_code, location, customer_id, trip_id, note, created_by, location_id)
+                 VALUES ($1,'DESTROYED',$2,$3,$4,$5,$6,$7,$8,$9)")
+        .bind(product).bind(qty as i32).bind(reason).bind(location).bind(customer).bind(trip_id).bind(format!("trip {trip_no}")).bind(user.id).bind(loc_id)
         .execute(&mut *tx).await?;
     Ok(())
 }
