@@ -217,6 +217,9 @@ async fn setup_admin(State(st): State<AppState>, ci: ClientInfo, ApiJson(b): Api
     if any { return Err(setup_disabled()); }
     let expected = ensure_setup_token(&st.db).await?.ok_or_else(setup_disabled)?;
     if !b.setup_token.as_deref().map_or(false, |g| g.len() <= 200 && token_matches(g.trim(), &expected)) {
+        // a concurrent request may have just completed setup (clearing the token): report that, not "bad token"
+        let now_any: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE is_admin)").fetch_one(&st.db).await?;
+        if now_any { return Err(setup_disabled()); }
         return Err(AppError::forbidden("A valid setup token is required. It is printed in the server log at first start (FIRST-RUN SETUP TOKEN)."));
     }
     let username = check_username("username", &b.username)?;
