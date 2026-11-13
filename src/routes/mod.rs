@@ -56,6 +56,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/api/setup", auth_routes::setup_router());
 
     let protected = Router::new()
+        .route("/api/events", get(crate::events::stream_handler))
         .nest("/api/me", auth_routes::me_router())
         .nest("/api/ref", ref_data::router())
         .nest("/api/notifications", notifications::router())

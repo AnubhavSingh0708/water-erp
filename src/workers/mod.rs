@@ -6,6 +6,7 @@ pub mod reorder;       // OWNER B: low-stock + burn-rate engine
 pub mod session_purge; // OWNER A: delete untouched sessions
 
 pub fn spawn_all(state: AppState) {
+    crate::events::spawn_listener(state.clone());
     session_purge::spawn(state.clone());
     reorder::spawn(state.clone());
     maintenance::spawn(state.clone());

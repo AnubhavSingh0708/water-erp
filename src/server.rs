@@ -17,5 +17,5 @@ pub fn http_client() -> reqwest::Client {
 
 pub async fn build_state(cfg: Config, pool: PgPool) -> anyhow::Result<AppState> {
     let settings = SettingsStore::load(&pool).await.map_err(|e| anyhow::anyhow!("{e}"))?;
-    Ok(AppState { db: pool, cfg: Arc::new(cfg), settings, http: http_client() })
+    Ok(AppState { db: pool, cfg: Arc::new(cfg), settings, http: http_client(), events: crate::events::EventHub::new() })
 }

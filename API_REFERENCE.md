@@ -206,7 +206,43 @@ QR payload = URL `{base}/loading.html?qr={code}` (`base` from `AppState::base_ur
 `--mode local|domain` (required unless `--localhost`). `--localhost` (testing): forces bind to `127.0.0.1`, mode `local`, plain HTTP unless `--tls-cert/--tls-key` are given (browsers treat `http://localhost` as a secure context, so the Secure cookie, camera and service worker still work). Not allowed with `--mode domain`. QR URLs then use the request Host (`http://localhost:<port>`).
 
 ---------------------------------------------------------------------------------------------------------------------
+## 15. Realtime events (Lead: `src/events.rs`, `migrations/0007_events.sql`) – pages refresh instantly
+
+**How it works.** DB triggers `pg_notify` a *topic name only* after every COMMITTED change (rollbacks emit nothing). A listener
+coalesces bursts (150 ms) and fans out over **SSE** `GET /api/events?page=<page>[&topics=a,b]`. Events never carry row data – the page
+re-fetches through its normal authorised REST calls. The stream is filtered twice: (1) by the user's `allowed_pages` (a user never receives
+topics of pages they cannot open) and (2) by the **page subscription** (`?page=`), so a page is only woken by events it actually renders.
+Errors: unknown page `400`, page not permitted `403`, > 8 streams/user `429`. The stream ends with `session_ended` when the key is revoked/expired/user deactivated (checked every 30 s).
+
+**Wire format** (use `fetch` + `ReadableStream` with `X-Auth-Key`; `EventSource` cannot send headers and we never put the key in a URL):
+`event: hello` · `event: change` `data:{"id":12,"topics":["stock","qr"],"ts":"…"}` · `event: resync` (listener/stream lagged – refresh everything) · `event: session_ended` (go to login) · `: ping` every 20 s.
+
+**Topics**: `stock, materials, production, qc, qr, trips, jars, maintenance, alerts, master, users, settings, admin`.
+
+| Page (`?page=`) | Subscribed topics | On event → refresh (only these regions; never reset open forms/modals) |
+|---|---|---|
+| `dashboard` | stock, materials, production, qc, trips, jars, maintenance, alerts, users | KPI tiles + lists (`GET /api/dashboard`) |
+| `raw-materials` | materials, stock, master, alerts, users | materials table + reorder list + open PO/GRN list (keep an open PO/GRN form untouched) |
+| `production` | production, stock, qc, materials, master, alerts, users | batch list, blow runs, water-log status (“hourly due”), BOM availability check of the open form (`/bom-check`) |
+| `qc` | qc, production, alerts, users | pending-QC queue + the open batch detail (if the open batch was decided elsewhere, show a banner “already decided by X” and disable buttons) |
+| `warehouse` | stock, production, qc, master, alerts, users | zone summary + current stock/ledger view (keep the current filter/page) |
+| `qr-labels` | qr, qc, production, alerts, users | batch sets list / sheet preview (QC status badges flip QUARANTINE→AVAILABLE live) |
+| `loading` | qr, trips, qc, stock, master, alerts, users | open trip + its items, capacity bar, scanned-set lookup status (e.g. a set just approved by QC becomes loadable; a set loaded by another phone shows `RESERVED` and the add button disables), trips list |
+| `jars` | jars, stock, master, alerts, users | summary + customer balances/overdue list |
+| `maintenance` | maintenance, alerts, users | schedules + vehicle docs |
+| `admin` | admin, settings, users, master, alerts | active admin tab only (users / sessions / audit / settings / master) |
+| `profile` | alerts, users, settings | subscription list |
+| all pages | `alerts` → bell badge `GET /api/notifications/inbox/unread-count`; `users` → re-fetch `/api/me`: if `allowed_pages` changed rebuild the nav, if the current page is no longer allowed redirect to the first allowed page; `resync` → refresh everything; `session_ended` → clear cookie, go to `login.html` | |
+
+**Client rules (`js/events.js`, owner D, used by every page)**
+* API: `ERP.live.start(page, {topicName: handler, …, '*': handler})`; handlers are debounced 300 ms per topic and run at most once concurrently (coalesce while a refresh is in flight).
+* Reconnect with exponential back-off (1 s → 30 s) + jitter; after every reconnect call every handler once (events may have been missed). Pause when `document.hidden` (close the stream) and resume + refresh on `visibilitychange`; also on `online`.
+* While a modal/scanner/form field is focused, refresh only list regions – never `innerHTML` the form. After a refresh the user's scroll position, filters, tab and selection are preserved.
+* The page that made a change also receives its own event; handlers must be idempotent and cheap (a refresh right after the actor’s own action is fine).
+* Show a small “Live”/“Reconnecting…” indicator (icon + text) in the app bar.
+
+---------------------------------------------------------------------------------------------------------------------
 ## 14. Frontend contract (Owners D, E – later phase)
 
 Static files in `./static/`, served by the same origin. **CSP is `script-src 'self'`: no inline `<script>`, no `onclick=` attributes** – use `addEventListener` in modules. All dynamic text must be inserted with `textContent` or the shared `esc()` helper (the only HTML built from strings is trusted SVG from `/qr` endpoints). Service worker must **never cache `/api/*`**. No external CDNs/fonts.
-Pages: `index.html, login.html, setup.html, dashboard.html, admin.html, profile.html, raw-materials.html, production.html, qc.html, warehouse.html, qr-labels.html, loading.html, jars.html, maintenance.html`. Shared: `css/styles.css`, `js/api.js` (cookie→header, 401→login redirect, error→toast), `js/nav.js`, `js/ui.js`, `js/jsQR.js` (vendored via `npm pack jsqr`), `sw.js`, `manifest.json`.
+Pages: `index.html, login.html, setup.html, dashboard.html, admin.html, profile.html, raw-materials.html, production.html, qc.html, warehouse.html, qr-labels.html, loading.html, jars.html, maintenance.html`. Shared: `css/styles.css`, `js/api.js` (cookie→header, 401→login redirect, error→toast), `js/events.js` (section 15), `js/nav.js`, `js/ui.js`, `js/jsQR.js` (vendored via `npm pack jsqr`), `sw.js`, `manifest.json`.

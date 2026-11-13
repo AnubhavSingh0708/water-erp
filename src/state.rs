@@ -1,4 +1,4 @@
-use crate::{config::Config, settings::SettingsStore};
+use crate::{config::Config, events::EventHub, settings::SettingsStore};
 use axum::http::{header, HeaderMap};
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -10,6 +10,8 @@ pub struct AppState {
     pub settings: SettingsStore,
     /// Outbound HTTP (Web Push). rustls only.
     pub http: reqwest::Client,
+    /// Realtime change fan-out (SSE). See events.rs.
+    pub events: EventHub,
 }
 
 impl AppState {
