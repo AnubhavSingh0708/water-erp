@@ -74,7 +74,6 @@ async fn issue_core(tx: &mut sqlx::PgConnection, st: &AppState, user: &AuthUser,
     }
 
     // stock: every item deducts ITS OWN lot (no FEFO re-allocation)
-    let gp_no = doc_no(tx, dry, "gatepass_seq", "GP").await?;
     let mut moves = vec![];
     let mut labels = Labels::new();
     for (bid, (idx, zone, crates)) in &per_batch {
@@ -88,9 +87,11 @@ async fn issue_core(tx: &mut sqlx::PgConnection, st: &AppState, user: &AuthUser,
                 json!({ "available": dec_str(on_hand), "required": crates, "batch_id": bid, "batch_no": b.batch_no, "zone": zone })));
         }
         labels.insert((b.product_id, b.id), format!("{} · {}", b.product_name, b.batch_no));
-        moves.push(product_move(b.product_id, zone, b.id, -crates, "GATE_PASS").reference("TRIP", trip_id).by(Some(user.id)).note(gp_no.clone()));
+        moves.push(product_move(b.product_id, zone, b.id, -crates, "GATE_PASS").reference("TRIP", trip_id).by(Some(user.id)).note(format!("gate pass for trip {}", trip.trip_no)));
     }
     post_moves(tx, moves, &labels, fx).await?;
+    // the number is taken only after every check and stock move succeeded, so failed attempts never leave gaps in the GP series
+    let gp_no = doc_no(tx, dry, "gatepass_seq", "GP").await?;
 
     sqlx::query("UPDATE loading_trips SET status = 'DISPATCHED', gate_pass_no = $2, gate_pass_issued_at = now(), issued_by = $3 WHERE id = $1")
         .bind(trip_id).bind(&gp_no).bind(user.id).execute(&mut *tx).await?;

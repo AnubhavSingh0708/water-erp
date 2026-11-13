@@ -101,7 +101,8 @@ pub async fn create(State(st): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>, 
     products.sort(); products.dedup();
     for p in &products { prelock_product_batches(&mut tx, *p).await?; }
 
-    let dn_no = doc_no(&mut tx, dry, "dn_seq", "DN").await?;
+    // the real number is assigned after every line succeeded (no gaps in the series for failed attempts)
+    let mut dn_no = format!("PENDING-{}", Uuid::new_v4());
     let dn_id: Uuid = sqlx::query_scalar(
         "INSERT INTO dispatch_notes (dn_no, customer_id, party_name, vehicle_no, note, created_by) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id")
         .bind(&dn_no).bind(b.customer_id).bind(&party).bind(&vehicle_no).bind(&note).bind(user.id).fetch_one(&mut *tx).await?;
@@ -125,10 +126,12 @@ pub async fn create(State(st): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>, 
                 .bind(dn_id).bind(bt.product_id).bind(bt.id).bind(n as i32).execute(&mut *tx).await?;
             let mut labels = Labels::new();
             labels.insert((bt.product_id, bt.id), format!("{} · {}", bt.product_name, bt.batch_no));
-            post_moves(&mut tx, vec![product_move(bt.product_id, "FG_READY", bt.id, -n, "DISPATCH").reference("DISPATCH", dn_id).by(Some(user.id)).note(dn_no.clone())], &labels, &mut fx).await?;
+            post_moves(&mut tx, vec![product_move(bt.product_id, "FG_READY", bt.id, -n, "DISPATCH").reference("DISPATCH", dn_id).by(Some(user.id)).note("dispatch note".to_string())], &labels, &mut fx).await?;
             total += n;
         }
     }
+    dn_no = doc_no(&mut tx, dry, "dn_seq", "DN").await?;
+    if !dry { sqlx::query("UPDATE dispatch_notes SET dn_no = $2 WHERE id = $1").bind(dn_id).bind(&dn_no).execute(&mut *tx).await?; }
     let out = dn_json(&mut tx, dn_id, &st.settings.get().plant_name).await?;
     audit::log(&mut *tx, Some(&user), "DISPATCH_NOTE", "dispatch_note", Some(dn_id.to_string()),
         json!({ "dn_no": dn_no, "customer_id": b.customer_id, "party_name": party, "crates": total })).await;
