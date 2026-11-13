@@ -10,7 +10,7 @@
 //!
 //! SSE frames: `event: hello` (once) · `event: change` data `{"id":N,"topics":["stock","qr"],"ts":"…"}` ·
 //! `event: resync` (listener reconnected / client lagged → refresh everything) · `event: session_ended` (key revoked or
-//! expired; stream closes) · `: ping` comments every 20 s.
+//! expired; stream closes) · `event: server_restarting` (graceful shutdown; client reconnects with back-off) · `: ping` comments every 20 s.
 use crate::{auth::AuthUser, error::AppError, state::AppState};
 use axum::{
     extract::{Query, State},
@@ -219,6 +219,10 @@ pub async fn stream_handler(State(state): State<AppState>, user: AuthUser, Query
                     Err(broadcast::error::RecvError::Lagged(_)) => return Some((Ok(Event::default().event("resync").data("{}")), st)),
                     Err(broadcast::error::RecvError::Closed) => return None,
                 },
+                _ = st.state.shutdown.wait() => {
+                    st.done = true;
+                    return Some((Ok(Event::default().event("server_restarting").data("{}")), st));
+                }
                 _ = st.tick.tick() => {
                     // a long-lived stream must not outlive its session or deactivated user
                     let alive: Option<i32> = sqlx::query_scalar(

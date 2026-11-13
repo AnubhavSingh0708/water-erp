@@ -1,0 +1,7 @@
+[Unit]
+Description=Water Plant ERP database backup
+[Service]
+Type=oneshot
+User=erp
+EnvironmentFile=/etc/water-erp/env
+ExecStart=/opt/water-erp/scripts/backup.sh /var/backups/water-erp

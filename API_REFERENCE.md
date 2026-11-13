@@ -25,6 +25,8 @@ Schema: `migrations/0001..0003` (Lead-owned, already applied). A may add `0004_*
 | 409 | `INSUFFICIENT_STOCK` | `details:{available,required,zone,…}` (batch creation: `details.shortages[]`) |
 | 409 | `QC_LOCKED` | batch/set is not APPROVED (strict lock) |
 | 409 | `CAPACITY_EXCEEDED` | vehicle capacity |
+| 409 | `CONFIRM_REQUIRED`, `IDEMPOTENCY_CONFLICT`, `IN_PROGRESS`, `FEATURE_DISABLED` | see §0.2 |
+| 503 | `UNAVAILABLE` | database/pool unreachable; nothing saved |
 | 409 | `INVALID_STATE` | state-machine violation (e.g. settle a trip that is not DISPATCHED) |
 | 409 | `VEHICLE_DOCS_EXPIRED` | gate pass blocked: insurance/fitness/PUC/permit expired |
 | 409 | `LAST_ADMIN` | cannot demote/deactivate/delete the last active Admin |
@@ -56,6 +58,41 @@ Schema: `migrations/0001..0003` (Lead-owned, already applied). A may add `0004_*
 7. Errors never include SQL text, hashes, keys, stack traces. Login responses never reveal whether a username exists.
 8. Output encoding: JSON only; SVG QR strings come solely from the QR generator.
 9. No endpoint returns `password_hash` or `key_hash`.
+
+---------------------------------------------------------------------------------------------------------------------
+## 0.2 AMENDMENTS (supersede conflicting text elsewhere in this file)
+
+### A. QR labels are OPTIONAL – loading works on gross stock by default
+* Setting `features.qr_labels` (default **false**). While false, **all `/api/qr/*` routes answer `409 FEATURE_DISABLED`** (gate already implemented in `routes/mod.rs`) and the QR/sticker UI is hidden. `/api/ref/settings` exposes `qr_labels_enabled`.
+* **Default loading = bulk by product/batch** (no stickers, no per-set ids). `trip_items.qr_set_id` is NULL for bulk items; unique per `(trip_id, batch_id)`.
+  * `GET /api/loading/availability?product_id=` → `[{product_id,product_name,kind,batch_id,batch_no,expiry_date,qc_status,fg_ready,reserved,available}]` ordered FEFO. `reserved` = Σ crates of bulk items in other **LOADING** trips for that batch; `available = fg_ready − reserved`. Only APPROVED batches (stock in `FG_READY`) are listed; when `loading.strict_qc_lock=false`, QUARANTINE batches are listed too with `qc_status` so the UI can badge them (never REJECTED).
+  * `POST /api/loading/trips/{id}/items` body one of: `{product_id, crates}` (server allocates FEFO across batches, may create several items; adding to an existing (trip,batch) item increments it) · `{batch_id, crates}` (explicit batch) · `{qr, crates?}` (only when QR feature on; as in §10). Rules inside one tx: trip `LOADING`; batch row `FOR UPDATE` (serialises concurrent loaders on the same batch); `crates ≤ available` else `INSUFFICIENT_STOCK` (`details.available`); QC rule (`QC_LOCKED` when batch not APPROVED and strict); capacity → `CAPACITY_EXCEEDED`.
+  * Gate pass / settle / void work identically for bulk items (no set-state transitions when `qr_set_id IS NULL`). ItemObj gains nullable `code`,`set_label` (null for bulk).
+* The warehouse, production and QC modules never depend on QR sets. QC approve/reject only touches `qr_crate_sets` rows if any exist.
+
+### B. Additional stock documents (tables in migration 0009). Documents are never deleted; the ledger is never edited. **Mistakes are corrected by VOID / reversing ledger rows that carry a reason and are audited.**
+| Doc | Owner/page | Endpoints (all POST bodies `deny_unknown_fields`) |
+|---|---|---|
+| **Dispatch note** (walk-in / direct sale of finished goods – quantities only, no prices/tax/payment) | C · `loading` | `POST /api/loading/dispatches {customer_id?|party_name, vehicle_no?, note?, lines:[{product_id,crates}|{batch_id,crates}]}` → FEFO from `FG_READY` (`DISPATCH` ledger), number `DN-yymmdd-0001`; needs `customer_id` or `party_name` · `GET /dispatches` `{items,total}` · `GET /dispatches/{id}` (printable) · `POST /dispatches/{id}/void {reason}` (restocks the same lots, `DISPATCH_VOID`; within `loading.void_window_hours` or Admin) |
+| **Gate-pass void** (wrong load / vehicle never left) | C · `loading` | `POST /api/loading/trips/{id}/void {reason, confirm:true}` only `DISPATCHED` and not settled, within `loading.void_window_hours` (Admin unlimited): restocks every item's lot (`GATE_PASS_VOID`), sets (if any) back to AVAILABLE, trip → `CANCELLED` with `void_reason` |
+| **GRN void** | B · `raw-materials` | `POST /api/raw-materials/grns/{id}/void {reason}` – only if each lot is still fully in `RM_STORE` (else `409 INSUFFICIENT_STOCK` "already consumed – use a supplier return or adjustment"); reverses ledger (`GRN_VOID`), rolls back `po_lines.qty_received`/PO status, GRN `status=VOID` |
+| **Supplier return** | B · `raw-materials` | `POST /api/raw-materials/supplier-returns {supplier_id, grn_id?, note?, lines:[{raw_material_id, lot_id, qty_stock, reason}]}` – stock out of `RM_STORE` (`RTV_OUT`), `RTV-yymmdd-0001`; `GET` list/detail (printable) |
+| **Write-off / destroyed stock** | B · `warehouse` | `POST /api/warehouse/write-offs {item_type,item_id,zone,lot_id,qty,reason_code,note,confirm:true,dispose?:bool}` – `reason_code ∈ BREAKAGE,EXPIRED,CONTAMINATED,SPILLAGE,QC_REJECT,THEFT_LOSS,TRANSIT_DAMAGE,OTHER`; note ≥ 5 chars; moves stock to `SCRAP_YARD` (`WRITE_OFF`) unless already there; `dispose:true` (or write-off from SCRAP_YARD) removes it from the books (`DISPOSE`). Not allowed from `QC_QUARANTINE` (QC owns that). `WO-yymmdd-0001`. `GET /write-offs` `{items,total}` (filter reason/from/to) + `?format=csv` |
+| **Physical stock count** | B · `warehouse` | `POST /api/warehouse/counts {zone, note?}` snapshots expected qty per (item,lot) → DRAFT · `PUT /counts/{id}/lines {lines:[{line_id,counted_qty,note?}]}` · `GET /counts/{id}` (shows `variance = counted − expected`, `% `) · `POST /counts/{id}/post {confirm:true}` posts `ADJUST` rows for variances (reason "stock count CNT-…"); balances changed since the snapshot are recomputed at post time (variance applies to the **current** balance: `delta = counted − current`) · `POST /counts/{id}/cancel`. Lines with large variance (> `entry.large_adjust_pct`) require the line `note`. |
+Printable sources (the UI prints them with `@media print`): GRN, supplier return, dispatch note, write-off, gate pass, count sheet.
+
+### C. Mistake-proofing patterns (every module must follow)
+1. **`confirm` flag** – suspicious but possible entries return `409 CONFIRM_REQUIRED` with `details.warnings:[…]`; the client shows them and re-sends the same body with `"confirm": true`. Mandatory cases: write-off (always), count post (always), adjustment/transfer larger than `entry.large_adjust_pct` % of the balance (or Δ ≥ 1000 units), gate-pass void (always), GRN with qty > 3× the remaining PO line or > 10× the median of the last 10 GRNs of that material, GRN whose `(supplier, challan_no)` already exists → `DUPLICATE` (never confirmable – void the old one), batch `crates` > 2× the max of the last 10 batches of that product, settlement where `damaged` > `settle.damage_warn_pct` % of loaded, blow run with `scrap_pct > production.scrap_warn_pct` (requires a non-empty `notes`, plus a `warnings` entry in the 201 response).
+2. **Soft warnings** – 2xx bodies for creates may include `"warnings":["…"]` (e.g. water reading out of range, batch within 10 % of expiry, loading ≥ 95 % of capacity). UI shows them as a non-blocking banner.
+3. **`?dry_run=1`** on `POST` of: GRN, batch creation, adjustments, transfers, write-offs, trip items, gate-pass, settle, dispatch, count post → runs the full logic in a transaction that is **rolled back**, returns `200 {"dry_run":true,"effects":[{"item","zone","delta","after"}…],"warnings":[…]}` or the same error the real call would give. The UI uses it to show a *review screen* ("This will deduct 40 crates of 1 L from batch B-…") before the real submit.
+4. **`Idempotency-Key`** header (implemented in `routes/mod.rs`): same user+key ⇒ first response replayed, handler not re-run. Frontend generates one key per user action and **reuses it on retries**.
+5. **Business dates** use `util::plant_today()` (plant local time, setting `plant.utc_offset_minutes`), never `CURRENT_DATE`.
+6. **Stale-screen defence** – state machines + row locks return `409 INVALID_STATE` (hint: "someone else changed this – review and retry"); list/detail responses include `updated_at` (or status) so the UI can show "changed by someone else".
+7. **Error envelope additions**: `error.hint` (actionable next step, server-generated per code, see `error.rs::hint_for`) and response header `X-Request-Id` (UI shows "Ref: …" on 5xx so admins can find the log line). `503 UNAVAILABLE` = DB/pool problem, nothing was saved. Request timeout 30 s → 503.
+8. **Number inputs**: server rejects NaN/negative/over-precision (see `validate.rs`); client also clamps; large values use `CONFIRM_REQUIRED`, never silently accepted.
+
+### D. Operational endpoints
+`GET /api/health` → `200 {status:"ok",db,db_ms,version}` · `503 {status:"degraded"|"shutting_down"}`. Graceful shutdown (SIGTERM/Ctrl-C): health turns 503, SSE streams get `server_restarting`, in-flight requests finish (≤ 25 s), workers see `state.shutdown`, DB pool closes. Workers MUST `select!` on `state.shutdown.wait()` in their sleep.
 
 ---------------------------------------------------------------------------------------------------------------------
 ## 1. Auth, setup, me  (Owner A)

@@ -2,6 +2,7 @@ use crate::{config::Config, events::EventHub, settings::SettingsStore};
 use axum::http::{header, HeaderMap};
 use sqlx::PgPool;
 use std::sync::Arc;
+use tokio::sync::watch;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -12,7 +13,23 @@ pub struct AppState {
     pub http: reqwest::Client,
     /// Realtime change fan-out (SSE). See events.rs.
     pub events: EventHub,
+    /// Graceful-shutdown signal. Workers: `tokio::select! { _ = sleep(..) => .., _ = state.shutdown.wait() => break }`.
+    pub shutdown: Shutdown,
 }
+
+#[derive(Clone)]
+pub struct Shutdown(Arc<watch::Sender<bool>>);
+impl Shutdown {
+    pub fn new() -> Self { Shutdown(Arc::new(watch::channel(false).0)) }
+    pub fn trigger(&self) { self.0.send_replace(true); }
+    pub fn is_triggered(&self) -> bool { *self.0.borrow() }
+    /// Resolves when shutdown has been requested.
+    pub async fn wait(&self) {
+        let mut rx = self.0.subscribe();
+        while !*rx.borrow_and_update() { if rx.changed().await.is_err() { return; } }
+    }
+}
+impl Default for Shutdown { fn default() -> Self { Self::new() } }
 
 impl AppState {
     /// Base URL embedded in QR labels: settings override -> --domain -> request Host header -> localhost.

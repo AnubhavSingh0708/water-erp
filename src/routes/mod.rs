@@ -26,9 +26,78 @@ pub mod qr;         // C  /api/qr/*
 pub mod ref_data;   // B  /api/ref/*
 pub mod warehouse;  // B  /api/warehouse/*
 
-async fn health(State(s): State<AppState>) -> Json<Value> {
-    let db_ok = sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(&s.db).await.is_ok();
-    Json(json!({ "status": if db_ok { "ok" } else { "degraded" }, "db": db_ok, "version": env!("CARGO_PKG_VERSION") }))
+/// Liveness + readiness. 503 while shutting down or when the database is unreachable (load balancers/monitors drain on this).
+async fn health(State(s): State<AppState>) -> (axum::http::StatusCode, Json<Value>) {
+    let t = std::time::Instant::now();
+    let db_ok = tokio::time::timeout(std::time::Duration::from_secs(3), sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(&s.db))
+        .await.map(|r| r.is_ok()).unwrap_or(false);
+    let stopping = s.shutdown.is_triggered();
+    let status = if stopping { "shutting_down" } else if db_ok { "ok" } else { "degraded" };
+    let code = if db_ok && !stopping { axum::http::StatusCode::OK } else { axum::http::StatusCode::SERVICE_UNAVAILABLE };
+    (code, Json(json!({ "status": status, "db": db_ok, "db_ms": t.elapsed().as_millis() as u64, "version": env!("CARGO_PKG_VERSION") })))
+}
+
+/// Adds `X-Request-Id` (UUID) to every response and tracing span so users can quote it and admins can find the log line.
+async fn request_id(req: Request, next: Next) -> Response {
+    let id = uuid::Uuid::new_v4().to_string();
+    let span = tracing::info_span!("req", id = %id, method = %req.method(), path = %req.uri().path());
+    let mut resp = tracing::Instrument::instrument(next.run(req), span).await;
+    if let Ok(v) = HeaderValue::from_str(&id) { resp.headers_mut().insert(HeaderName::from_static("x-request-id"), v); }
+    resp
+}
+
+/// Optional feature gate (`features.qr_labels`): QR crate-set endpoints answer 404 FEATURE_DISABLED while the feature is off.
+async fn qr_feature_gate(State(s): State<AppState>, req: Request, next: Next) -> Result<Response, AppError> {
+    if !s.settings.get().qr_labels_enabled {
+        return Err(AppError::Conflict { code: "FEATURE_DISABLED", message: "QR labels are switched off. Load stock by product and batch instead.".into(), details: Value::Null });
+    }
+    Ok(next.run(req).await)
+}
+
+/// Idempotency for retried writes (weak Wi-Fi / double tap). Clients send `Idempotency-Key: <uuid>` on POST/PUT/PATCH/DELETE.
+/// Same user+key => the first response is replayed (`Idempotent-Replay: true`) and the handler is NOT run again.
+/// While the first request is still running a duplicate gets 409 IN_PROGRESS. 5xx responses are not stored (safe to retry).
+pub async fn idempotency(State(s): State<AppState>, req: Request, next: Next) -> Result<Response, AppError> {
+    if !matches!(*req.method(), Method::POST | Method::PUT | Method::PATCH | Method::DELETE) { return Ok(next.run(req).await); }
+    let Some(key) = req.headers().get("idempotency-key").and_then(|v| v.to_str().ok()).map(str::to_owned) else { return Ok(next.run(req).await) };
+    if key.len() < 8 || key.len() > 64 || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err(AppError::field("Idempotency-Key", "must be 8-64 characters (letters, digits, - _)"));
+    }
+    let user = req.extensions().get::<auth::AuthUser>().ok_or(AppError::Unauthorized)?.id;
+    let (method, path) = (req.method().to_string(), req.uri().path().to_string());
+    // take over keys abandoned by a crashed request (> 2 minutes without a stored response)
+    sqlx::query("DELETE FROM idempotency_keys WHERE user_id=$1 AND key=$2 AND status IS NULL AND created_at < now() - interval '2 minutes'")
+        .bind(user).bind(&key).execute(&s.db).await?;
+    let inserted = sqlx::query("INSERT INTO idempotency_keys (user_id, key, method, path) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING")
+        .bind(user).bind(&key).bind(&method).bind(&path).execute(&s.db).await?.rows_affected();
+    if inserted == 0 {
+        let row: (String, String, Option<i32>, Option<Vec<u8>>) =
+            sqlx::query_as("SELECT method, path, status, body FROM idempotency_keys WHERE user_id=$1 AND key=$2").bind(user).bind(&key).fetch_one(&s.db).await?;
+        if row.0 != method || row.1 != path { return Err(AppError::conflict("IDEMPOTENCY_CONFLICT", "Idempotency key was used for a different request")); }
+        return match (row.2, row.3) {
+            (Some(st), Some(body)) => {
+                let mut r = Response::new(axum::body::Body::from(body));
+                *r.status_mut() = axum::http::StatusCode::from_u16(st as u16).unwrap_or(axum::http::StatusCode::OK);
+                r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                r.headers_mut().insert(HeaderName::from_static("idempotent-replay"), HeaderValue::from_static("true"));
+                Ok(r)
+            }
+            _ => Err(AppError::conflict("IN_PROGRESS", "The same request is still being processed")),
+        };
+    }
+    if rand::random::<u8>() < 3 { // ~1 % of writes: prune old keys
+        let _ = sqlx::query("DELETE FROM idempotency_keys WHERE created_at < now() - interval '2 days'").execute(&s.db).await;
+    }
+    let resp = next.run(req).await;
+    let (parts, body) = resp.into_parts();
+    let bytes = axum::body::to_bytes(body, 512 * 1024).await.map_err(|e| AppError::Internal(anyhow::anyhow!("idempotency body: {e}")))?;
+    if parts.status.is_server_error() {
+        let _ = sqlx::query("DELETE FROM idempotency_keys WHERE user_id=$1 AND key=$2").bind(user).bind(&key).execute(&s.db).await;
+    } else {
+        sqlx::query("UPDATE idempotency_keys SET status=$3, body=$4 WHERE user_id=$1 AND key=$2")
+            .bind(user).bind(&key).bind(parts.status.as_u16() as i32).bind(bytes.as_ref()).execute(&s.db).await?;
+    }
+    Ok(Response::from_parts(parts, axum::body::Body::from(bytes)))
 }
 
 async fn api_not_found() -> AppError { AppError::NotFound("endpoint".into()) }
@@ -65,15 +134,20 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/api/production", guarded(&["production"], production::router()))
         .nest("/api/qc", guarded(&["qc"], qc::router()))
         .nest("/api/warehouse", guarded(&["warehouse"], warehouse::router()))
-        .nest("/api/qr", guarded(&["qr-labels", "loading"], qr::router()))
+        .nest("/api/qr", guarded(&["qr-labels", "loading"], qr::router().layer(middleware::from_fn_with_state(state.clone(), qr_feature_gate))))
         .nest("/api/loading", guarded(&["loading"], loading::router()))
         .nest("/api/jars", guarded(&["jars"], jars::router()))
         .nest("/api/maintenance", guarded(&["maintenance"], maintenance::router()))
         .nest("/api/admin", admin::router().layer(middleware::from_fn(auth::admin_guard)))
+        .layer(middleware::from_fn_with_state(state.clone(), idempotency))
         .layer(middleware::from_fn_with_state(state.clone(), auth::auth_middleware));
 
     let static_dir = state.cfg.static_dir.clone();
     let sec = |n: &'static str, v: &'static str| SetResponseHeaderLayer::overriding(HeaderName::from_static(n), HeaderValue::from_static(v));
+
+    // HSTS only when we terminate TLS ourselves
+    let hsts = SetResponseHeaderLayer::overriding(HeaderName::from_static("strict-transport-security"),
+        HeaderValue::from_static(if state.cfg.insecure_http { "max-age=0" } else { "max-age=31536000" }));
 
     Router::new()
         .merge(public)
@@ -87,7 +161,11 @@ pub fn build_router(state: AppState) -> Router {
         .layer(sec("permissions-policy", "camera=(self), geolocation=()"))
         .layer(sec("content-security-policy",
             "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'"))
+        .layer(sec("cross-origin-opener-policy", "same-origin"))
+        .layer(hsts)
         .layer(CompressionLayer::new())
+        .layer(tower_http::timeout::TimeoutLayer::with_status_code(axum::http::StatusCode::SERVICE_UNAVAILABLE, std::time::Duration::from_secs(30)))
+        .layer(middleware::from_fn(request_id))
         .layer(TraceLayer::new_for_http())
         .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024))
         .with_state(state)

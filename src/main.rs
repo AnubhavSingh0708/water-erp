@@ -29,16 +29,40 @@ async fn main() -> anyhow::Result<()> {
     }
 
     workers::spawn_all(state.clone());
-    let app = routes::build_router(state);
+    let app = routes::build_router(state.clone());
+    let shutdown = state.shutdown.clone();
+    tokio::spawn({
+        let shutdown = shutdown.clone();
+        async move { wait_for_signal().await; tracing::info!("shutdown signal received: draining"); shutdown.trigger(); }
+    });
 
     if cfg.insecure_http {
         tracing::warn!("serving PLAIN HTTP on {} (insecure-http)", cfg.bind);
         let l = tokio::net::TcpListener::bind(cfg.bind).await?;
-        axum::serve(l, app).await?;
+        let sd = shutdown.clone();
+        axum::serve(l, app).with_graceful_shutdown(async move { sd.wait().await }).await?;
     } else {
         let rustls_cfg = tls::rustls_config(&cfg).await?;
         tracing::info!("serving HTTPS on {} ({:?} mode)", cfg.bind, if cfg.mode == Mode::Local { "local" } else { "domain" });
-        axum_server::bind_rustls(cfg.bind, rustls_cfg).serve(app.into_make_service()).await?;
+        let handle = axum_server::Handle::new();
+        let (h, sd) = (handle.clone(), shutdown.clone());
+        tokio::spawn(async move { sd.wait().await; h.graceful_shutdown(Some(std::time::Duration::from_secs(25))); });
+        axum_server::bind_rustls(cfg.bind, rustls_cfg).handle(handle).serve(app.into_make_service()).await?;
     }
+    // Order: stop accepting + drain requests (above) -> let workers notice the signal -> close DB pool.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    state.db.close().await;
+    tracing::info!("shutdown complete");
     Ok(())
+}
+
+async fn wait_for_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut term = signal(SignalKind::terminate()).expect("SIGTERM handler");
+        tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = term.recv() => {} }
+    }
+    #[cfg(not(unix))]
+    { let _ = tokio::signal::ctrl_c().await; }
 }
