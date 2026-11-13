@@ -12,4 +12,5 @@ pub mod state;
 pub mod stock;
 pub mod tls;
 pub mod util;
+pub mod validate;
 pub mod workers;
