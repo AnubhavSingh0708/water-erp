@@ -272,12 +272,12 @@ pub const ITEM_SELECT: &str =
      LEFT JOIN qr_crate_sets s ON s.id = ti.qr_set_id";
 
 pub async fn trip_items(conn: &mut PgConnection, trip_id: Uuid) -> AppResult<Vec<ItemRow>> {
-    Ok(sqlx::query_as::<_, ItemRow>(&format!("{ITEM_SELECT} WHERE ti.trip_id = $1 ORDER BY ti.created_at ASC, ti.id ASC"))
+    Ok(sqlx::query_as::<_, ItemRow>(&format!("{ITEM_SELECT} WHERE ti.trip_id = $1 ORDER BY ti.created_at ASC, b.expiry_date ASC, ti.id ASC"))
         .bind(trip_id).fetch_all(&mut *conn).await?)
 }
 
 pub async fn items_by_ids(conn: &mut PgConnection, ids: &[Uuid]) -> AppResult<Vec<ItemRow>> {
-    Ok(sqlx::query_as::<_, ItemRow>(&format!("{ITEM_SELECT} WHERE ti.id = ANY($1) ORDER BY ti.created_at ASC, ti.id ASC"))
+    Ok(sqlx::query_as::<_, ItemRow>(&format!("{ITEM_SELECT} WHERE ti.id = ANY($1) ORDER BY ti.created_at ASC, b.expiry_date ASC, ti.id ASC"))
         .bind(ids).fetch_all(&mut *conn).await?)
 }
 
