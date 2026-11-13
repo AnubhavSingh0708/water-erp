@@ -67,3 +67,16 @@ Deviations from `API_REFERENCE.md`, decisions and hand-offs. Everything here is 
   `HIGH_DESTROY_RATE` when `destroyed*100 > destroy_warn_pct*fills` (so any destruction with zero fills counts); `NEAR_RETIREMENT` at `retirement_pct >= 90`;
   `HIGH_DESTROY_RATE` wins when both apply.
 * Dry runs return `effects[{item,zone,delta,after}]` with 4-dp strings (`"-2.0000"`); the customer side uses `zone:"CUSTOMER"`. Real responses (`201`) include `effects` and `warnings` too.
+
+## Tier 3 – Maintenance & fleet documents
+
+* Status: `OVERDUE` = date before plant-local today; `DUE_SOON` = within `alerts.expiry_lead_days` **inclusive** (today counts as due, not overdue); else `OK`.
+  Vehicle documents use the same three words (not `EXPIRED`) plus an `expired` boolean; documents without a date are not tracked/listed; inactive
+  vehicles/equipment and inactive schedules are hidden. Lists are bounded to 500 rows, soonest first.
+* `POST /schedules/{id}/complete`: schedule row locked `FOR UPDATE`; `done_on` defaults to plant today and may not be in the future; completing on or before
+  `last_done_on` -> `409 INVALID_STATE` (double-submit guard); `next_due_on` defaults to `done_on + interval_days`, required without an interval and must be after
+  `done_on`. The old `MAINTENANCE_DUE` alert is resolved in the same transaction. Returns the updated schedule row (+ `log_id`).
+* Worker `workers::maintenance::run_once` (hourly, plus once at start): per event type it raises what is currently true and **resolves every open alert of that type
+  whose key is no longer current** (set difference), so completed/moved/deactivated/renewed items clear themselves. Already-open alerts get their title/severity refreshed in
+  place (DUE_SOON -> OVERDUE) without re-notifying. Keys: see the header of `workers/maintenance.rs`. `JAR_FLEET_ALERT` keys (contract has none):
+  `<product_id>:HIGH_DESTROY_RATE` and `<product_id>:NEAR_RETIREMENT`.

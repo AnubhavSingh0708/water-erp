@@ -66,7 +66,7 @@ pub async fn load_returnable(conn: &mut PgConnection, id: Uuid) -> AppResult<Ret
     Ok(ReturnableProduct { id, code: r.get("code"), name: r.get("name"), size_ml: r.get("size_ml"), max_cycles: r.get("max_cycles") })
 }
 
-async fn active_returnable_products(conn: &mut PgConnection) -> AppResult<Vec<ReturnableProduct>> {
+pub async fn active_returnable_products(conn: &mut PgConnection) -> AppResult<Vec<ReturnableProduct>> {
     let rows = sqlx::query("SELECT id, code, name, size_ml, max_cycles FROM products WHERE kind = 'RETURNABLE' AND is_active ORDER BY name, id")
         .fetch_all(&mut *conn).await?;
     Ok(rows.iter().map(|r| ReturnableProduct { id: r.get("id"), code: r.get("code"), name: r.get("name"), size_ml: r.get("size_ml"), max_cycles: r.get("max_cycles") }).collect())
