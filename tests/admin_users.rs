@@ -14,7 +14,7 @@ async fn every_admin_route_family_is_admin_only(pool: PgPool) {
     let (_, user_key) = plain_user(&pool, "plain").await;
     let nil = Uuid::nil();
     let gets = ["settings", "pages", "notification-types", "users", "sessions", "audit", "suppliers", "raw-materials", "products", "customers",
-                "routes", "vehicles", "equipment", "maintenance-schedules"];
+                "routes", "vehicles", "equipment", "maintenance-schedules", "locations"];
     for g in gets {
         assert_eq!(req(&app, "GET", &format!("/api/admin/{g}"), Some(&user_key), None).await.0, StatusCode::FORBIDDEN, "GET {g}");
         assert_eq!(req(&app, "GET", &format!("/api/admin/{g}"), None, None).await.0, StatusCode::UNAUTHORIZED, "anon GET {g}");
@@ -25,7 +25,7 @@ async fn every_admin_route_family_is_admin_only(pool: PgPool) {
         ("DELETE", format!("sessions/{nil}")), ("POST", "sessions/revoke-all".into()),
         ("POST", "suppliers".into()), ("PUT", format!("suppliers/{nil}")), ("DELETE", format!("suppliers/{nil}")),
         ("POST", "raw-materials".into()), ("POST", "products".into()), ("PUT", format!("products/{nil}/bom")), ("GET", format!("products/{nil}/bom")),
-        ("POST", "customers".into()), ("POST", "routes".into()), ("POST", "vehicles".into()), ("POST", "equipment".into()), ("POST", "maintenance-schedules".into()),
+        ("POST", "customers".into()), ("POST", "locations".into()), ("PUT", format!("locations/{nil}")), ("DELETE", format!("locations/{nil}")), ("POST", "routes".into()), ("POST", "vehicles".into()), ("POST", "equipment".into()), ("POST", "maintenance-schedules".into()),
     ];
     for (m, p) in writes {
         let (s, _) = req(&app, m, &format!("/api/admin/{p}"), Some(&user_key), Some(json!({}))).await;

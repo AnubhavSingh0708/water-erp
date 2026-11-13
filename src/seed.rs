@@ -7,7 +7,7 @@
 //! Demo accounts use a KNOWN password - never run this against a production database.
 use crate::{
     routes::admin::common::hash_password_blocking,
-    stock::{self, ItemType, Move, NIL_LOT},
+    stock::{self, ItemType, Move, MAIN_LOCATION, NIL_LOT, TRANSIT_LOCATION},
     util,
 };
 use anyhow::Context;
@@ -33,7 +33,8 @@ pub async fn run(db: &PgPool) -> anyhow::Result<()> {
     }
     let mut tx = db.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext('water-erp-seed-demo'))").execute(&mut *tx).await?;
-    let ids = seed_users(&mut tx, &users, &hashes).await?;
+    let locs = seed_locations(&mut tx).await?;
+    let ids = seed_users(&mut tx, &users, &hashes, &locs).await?;
     let today = util::plant_today(&mut tx).await.map_err(|e| anyhow::anyhow!("{e}"))?;
     let m = seed_master(&mut tx, today).await?;
     let done: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM stock_ledger WHERE note LIKE 'seed-demo%')").fetch_one(&mut *tx).await?;
@@ -42,9 +43,15 @@ pub async fn run(db: &PgPool) -> anyhow::Result<()> {
     } else {
         seed_operations(&mut tx, &ids, &m, today).await.context("seeding operations")?;
     }
+    let godowns_done: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM stock_ledger WHERE note LIKE 'seed-demo godown%')").fetch_one(&mut *tx).await?;
+    if godowns_done {
+        tracing::info!("seed-demo: godown demo data already present, skipping");
+    } else {
+        seed_godowns(&mut tx, &ids, &m, &locs, today).await.context("seeding godowns")?;
+    }
     tx.commit().await?;
-    tracing::warn!("seed-demo finished. Demo logins (password {DEMO_PASSWORD}): admin, manager, loader, qc, gate, store, operator, jars - DEVELOPMENT ONLY");
-    println!("Demo data ready. Logins: admin, manager, loader, qc, gate, store, operator, jars  (password: {DEMO_PASSWORD})");
+    tracing::warn!("seed-demo finished. Demo logins (password {DEMO_PASSWORD}): admin, manager, loader, qc, gate, store, store_north, operator, jars - DEVELOPMENT ONLY");
+    println!("Demo data ready. Logins: admin, manager, loader, qc, gate, store, store_north, operator, jars  (password: {DEMO_PASSWORD})");
     Ok(())
 }
 
@@ -52,28 +59,48 @@ pub async fn run(db: &PgPool) -> anyhow::Result<()> {
 // Users
 // ---------------------------------------------------------------------------------------------------------------------
 
-struct DemoUser { name: &'static str, full: &'static str, admin: bool, pages: &'static [&'static str], subs: &'static [&'static str] }
+struct DemoUser { name: &'static str, full: &'static str, admin: bool, pages: &'static [&'static str], subs: &'static [&'static str], godowns: &'static [&'static str] }
 
 fn demo_users() -> Vec<DemoUser> {
     const ALL_BUT_ADMIN: &[&str] = &["dashboard", "raw-materials", "production", "qc", "warehouse", "qr-labels", "loading", "jars", "maintenance"];
     vec![
-        DemoUser { name: "admin", full: "Demo Administrator", admin: true, pages: ALL_BUT_ADMIN, subs: &["LOW_STOCK", "REORDER_RECOMMENDED", "QC_PENDING", "QC_REJECTED", "WATER_OUT_OF_RANGE", "MAINTENANCE_DUE", "VEHICLE_DOC_EXPIRY", "JAR_OVERDUE", "JAR_FLEET_ALERT", "STOCK_EXPIRY"] },
-        DemoUser { name: "manager", full: "Plant Manager", admin: false, pages: ALL_BUT_ADMIN, subs: &["LOW_STOCK", "QC_REJECTED", "WATER_OUT_OF_RANGE", "MAINTENANCE_DUE", "VEHICLE_DOC_EXPIRY", "JAR_OVERDUE", "STOCK_EXPIRY"] },
-        DemoUser { name: "loader", full: "Loading Supervisor", admin: false, pages: &["loading", "qr-labels", "warehouse", "dashboard"], subs: &["GATE_PASS_ISSUED", "QC_APPROVED"] },
-        DemoUser { name: "qc", full: "Lab Analyst", admin: false, pages: &["qc", "dashboard"], subs: &["QC_PENDING", "WATER_OUT_OF_RANGE"] },
-        DemoUser { name: "gate", full: "Gate Keeper", admin: false, pages: &["loading", "dashboard"], subs: &["GATE_PASS_ISSUED", "TRIP_SETTLED"] },
-        DemoUser { name: "store", full: "Store Keeper", admin: false, pages: &["raw-materials", "warehouse", "dashboard"], subs: &["LOW_STOCK", "REORDER_RECOMMENDED", "STOCK_EXPIRY"] },
-        DemoUser { name: "operator", full: "Line Operator", admin: false, pages: &["production", "dashboard"], subs: &["QC_APPROVED", "QC_REJECTED", "WATER_OUT_OF_RANGE"] },
-        DemoUser { name: "jars", full: "Jar Section Lead", admin: false, pages: &["jars", "maintenance", "dashboard"], subs: &["JAR_OVERDUE", "JAR_FLEET_ALERT", "MAINTENANCE_DUE"] },
+        DemoUser { name: "admin", full: "Demo Administrator", admin: true, pages: ALL_BUT_ADMIN, subs: &["LOW_STOCK", "REORDER_RECOMMENDED", "QC_PENDING", "QC_REJECTED", "WATER_OUT_OF_RANGE", "MAINTENANCE_DUE", "VEHICLE_DOC_EXPIRY", "JAR_OVERDUE", "JAR_FLEET_ALERT", "STOCK_EXPIRY"], godowns: &[] },
+        DemoUser { name: "manager", full: "Plant Manager", admin: false, pages: ALL_BUT_ADMIN, subs: &["LOW_STOCK", "QC_REJECTED", "WATER_OUT_OF_RANGE", "MAINTENANCE_DUE", "VEHICLE_DOC_EXPIRY", "JAR_OVERDUE", "STOCK_EXPIRY"], godowns: &[] },
+        DemoUser { name: "loader", full: "Loading Supervisor", admin: false, pages: &["loading", "qr-labels", "warehouse", "dashboard"], subs: &["GATE_PASS_ISSUED", "QC_APPROVED"], godowns: &[] },
+        DemoUser { name: "qc", full: "Lab Analyst", admin: false, pages: &["qc", "dashboard"], subs: &["QC_PENDING", "WATER_OUT_OF_RANGE"], godowns: &[] },
+        DemoUser { name: "gate", full: "Gate Keeper", admin: false, pages: &["loading", "dashboard"], subs: &["GATE_PASS_ISSUED", "TRIP_SETTLED"], godowns: &[] },
+        DemoUser { name: "store", full: "Store Keeper", admin: false, pages: &["raw-materials", "warehouse", "dashboard"], subs: &["LOW_STOCK", "REORDER_RECOMMENDED", "STOCK_EXPIRY"], godowns: &[] },
+        DemoUser { name: "store_north", full: "North Godown Keeper", admin: false, pages: &["warehouse", "raw-materials", "dashboard"], subs: &["LOW_STOCK", "STOCK_EXPIRY"], godowns: &["GDN-NORTH"] },
+        DemoUser { name: "operator", full: "Line Operator", admin: false, pages: &["production", "dashboard"], subs: &["QC_APPROVED", "QC_REJECTED", "WATER_OUT_OF_RANGE"], godowns: &[] },
+        DemoUser { name: "jars", full: "Jar Section Lead", admin: false, pages: &["jars", "maintenance", "dashboard"], subs: &["JAR_OVERDUE", "JAR_FLEET_ALERT", "MAINTENANCE_DUE"], godowns: &[] },
     ]
 }
 
-async fn seed_users(tx: &mut PgConnection, users: &[DemoUser], hashes: &[String]) -> anyhow::Result<HashMap<&'static str, Uuid>> {
+/// The two demo godowns (besides MAIN). Idempotent by code. Returns code -> id for MAIN, GDN-NORTH and GDN-CITY.
+async fn seed_locations(tx: &mut PgConnection) -> anyhow::Result<HashMap<&'static str, Uuid>> {
+    for (code, name, address, city, person, phone) in [
+        ("GDN-NORTH", "North Godown (Noida Road)", "Plot 14, Noida Road Industrial Belt", "Noida", "Vikram Singh", "+91 98100 30001"),
+        ("GDN-CITY", "City Godown", "27 Market Yard, Old City", "Demo City", "Meena Joshi", "+91 98100 30002"),
+    ] {
+        sqlx::query("INSERT INTO locations (code, name, kind, address, city, contact_person, phone, is_production_site) VALUES ($1,$2,'GODOWN',$3,$4,$5,$6,false)
+                     ON CONFLICT (code) DO NOTHING")
+            .bind(code).bind(name).bind(address).bind(city).bind(person).bind(phone).execute(&mut *tx).await?;
+    }
+    let mut m: HashMap<&'static str, Uuid> = HashMap::new();
+    m.insert("MAIN", MAIN_LOCATION);
+    for code in ["GDN-NORTH", "GDN-CITY"] {
+        m.insert(code, sqlx::query_scalar("SELECT id FROM locations WHERE code = $1").bind(code).fetch_one(&mut *tx).await?);
+    }
+    Ok(m)
+}
+
+async fn seed_users(tx: &mut PgConnection, users: &[DemoUser], hashes: &[String], locs: &HashMap<&'static str, Uuid>) -> anyhow::Result<HashMap<&'static str, Uuid>> {
     let mut ids = HashMap::new();
     for (u, h) in users.iter().zip(hashes) {
-        sqlx::query("INSERT INTO users (username, full_name, password_hash, is_admin, allowed_pages, subscribed_notifications) VALUES ($1,$2,$3,$4,$5,$6)
+        let allowed: Vec<Uuid> = u.godowns.iter().map(|c| locs[c]).collect();
+        sqlx::query("INSERT INTO users (username, full_name, password_hash, is_admin, allowed_pages, subscribed_notifications, allowed_location_ids) VALUES ($1,$2,$3,$4,$5,$6,$7)
                      ON CONFLICT (lower(username)) DO NOTHING")
-            .bind(u.name).bind(u.full).bind(h).bind(u.admin).bind(json!(u.pages)).bind(json!(u.subs)).execute(&mut *tx).await?;
+            .bind(u.name).bind(u.full).bind(h).bind(u.admin).bind(json!(u.pages)).bind(json!(u.subs)).bind(json!(allowed)).execute(&mut *tx).await?;
         let id: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE lower(username) = $1").bind(u.name).fetch_one(&mut *tx).await?;
         ids.insert(u.name, id);
     }
@@ -394,5 +421,116 @@ async fn seed_operations(tx: &mut PgConnection, ids: &HashMap<&'static str, Uuid
         sqlx::query("INSERT INTO maintenance_logs (schedule_id, done_on, done_by, notes, next_due_on) VALUES ($1,$2,$3,'Lamp replaced, hours counter reset',$4)")
             .bind(sid).bind(today - Duration::days(300)).bind(admin).bind(today + Duration::days(65)).execute(&mut *tx).await?;
     }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Godowns: own goods-received stock plus inter-godown transfers (two RECEIVED, one with a damaged crate, and one IN_TRANSIT)
+// ---------------------------------------------------------------------------------------------------------------------
+
+struct TLine { item: ItemType, item_id: Uuid, lot: Uuid, zone: &'static str, qty: Decimal, damaged: Decimal }
+
+/// Stock leaves `from` into TRANSIT (GODOWN_TRANSFER_OUT); when `receive` it is booked into `to` right away (GODOWN_TRANSFER_IN,
+/// damaged quantity into the destination's SCRAP_YARD as TRANSIT_DAMAGE) and the transfer is RECEIVED, otherwise it stays IN_TRANSIT.
+/// Skipped when the source does not hold enough (a database whose demo stock was already used up).
+#[allow(clippy::too_many_arguments)]
+async fn seed_transfer(tx: &mut PgConnection, by: Uuid, receiver: Option<Uuid>, from: Uuid, to: Uuid, lines: &[TLine], receive: bool, days_ago: i64,
+                       vehicle: (Uuid, &str, &str), note_text: &str) -> anyhow::Result<()> {
+    for l in lines {
+        let have = stock::available_at(&mut *tx, from, l.item, l.item_id, l.zone).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        if have < l.qty { tracing::warn!("seed-demo: skipping demo transfer, source godown holds only {have} of {}", l.qty); return Ok(()); }
+    }
+    let tf_no = util::next_no(&mut *tx, "tf_seq", "TF").await.map_err(|e| anyhow::anyhow!("{e}"))?;
+    let tf_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO godown_transfers (tf_no, from_location_id, to_location_id, status, vehicle_id, vehicle_no, driver_name, note, created_by, created_at)
+         VALUES ($1,$2,$3,'IN_TRANSIT',$4,$5,$6,$7,$8, now() - make_interval(days => $9)) RETURNING id")
+        .bind(&tf_no).bind(from).bind(to).bind(vehicle.0).bind(vehicle.1).bind(vehicle.2).bind(format!("{MARK} godown {note_text}")).bind(by).bind(days_ago as i32)
+        .fetch_one(&mut *tx).await?;
+    let ledger_note = format!("{MARK} godown {tf_no}");
+    for l in lines {
+        let line_id: Uuid = sqlx::query_scalar("INSERT INTO godown_transfer_lines (transfer_id, item_type, item_id, lot_id, zone, qty_sent) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id")
+            .bind(tf_id).bind(l.item.as_str()).bind(l.item_id).bind(l.lot).bind(l.zone).bind(l.qty).fetch_one(&mut *tx).await?;
+        stock::transfer_between(&mut *tx, l.item, l.item_id, l.lot, from, l.zone, TRANSIT_LOCATION, l.zone, l.qty, "GODOWN_TRANSFER_OUT",
+                                Some("GODOWN_TRANSFER"), Some(tf_id), Some(by), &ledger_note).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        if receive {
+            let good = l.qty - l.damaged;
+            if good > Decimal::ZERO {
+                stock::transfer_between(&mut *tx, l.item, l.item_id, l.lot, TRANSIT_LOCATION, l.zone, to, l.zone, good, "GODOWN_TRANSFER_IN",
+                                        Some("GODOWN_TRANSFER"), Some(tf_id), receiver, &ledger_note).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+            }
+            if l.damaged > Decimal::ZERO {
+                stock::transfer_between(&mut *tx, l.item, l.item_id, l.lot, TRANSIT_LOCATION, l.zone, to, "SCRAP_YARD", l.damaged, "TRANSIT_DAMAGE",
+                                        Some("GODOWN_TRANSFER"), Some(tf_id), receiver, &ledger_note).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+            }
+            sqlx::query("UPDATE godown_transfer_lines SET qty_received = $2, qty_damaged = $3 WHERE id = $1").bind(line_id).bind(good).bind(l.damaged).execute(&mut *tx).await?;
+        }
+    }
+    if receive {
+        sqlx::query("UPDATE godown_transfers SET status='RECEIVED', received_by=$2, received_at = now() - make_interval(days => $3) WHERE id=$1")
+            .bind(tf_id).bind(receiver).bind((days_ago - 1).max(0) as i32).execute(&mut *tx).await?;
+    }
+    Ok(())
+}
+
+async fn seed_godowns(tx: &mut PgConnection, ids: &HashMap<&'static str, Uuid>, m: &Master, locs: &HashMap<&'static str, Uuid>, today: NaiveDate) -> anyhow::Result<()> {
+    let admin = ids["admin"];
+    let (north, city) = (locs["GDN-NORTH"], locs["GDN-CITY"]);
+    let note = |s: &str| format!("{MARK} godown {s}");
+
+    // ---- goods received straight into each godown: different lots and expiries per godown ----
+    type Line = (&'static str, &'static str, &'static str, i64);
+    let grns: Vec<(Uuid, usize, &str, i64, Vec<Line>)> = vec![
+        (north, 1, "CS-N-101", 10, vec![("CAP-28", "3", "CAP-N1", 500), ("LBL-500", "4", "LB5-N1", 460), ("CTN-500", "10", "C5-N1", 800), ("JAR-SEAL", "1", "JS-N1", 640)]),
+        (city, 1, "CS-C-201", 9, vec![("CAP-28", "2", "CAP-C1", 210), ("LBL-1000", "3", "LB1-C1", 520), ("CTN-1000", "6", "C1-C1", 900), ("SHR-FILM", "1", "SF-C1", 700)]),
+    ];
+    for (loc, sidx, challan, days_ago, lines) in grns {
+        let grn_no = util::next_no(&mut *tx, "grn_seq", "GRN").await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        let grn_id: Uuid = sqlx::query_scalar("INSERT INTO grns (grn_no, supplier_id, received_on, challan_no, notes, received_by, location_id) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id")
+            .bind(&grn_no).bind(m.suppliers[sidx]).bind(today - Duration::days(days_ago)).bind(challan).bind(note("goods received")).bind(admin).bind(loc).fetch_one(&mut *tx).await?;
+        for (mcode, qty, lot_no, exp) in lines {
+            let mid = m.mat[mcode];
+            let spp: Decimal = sqlx::query_scalar("SELECT stock_per_purchase_unit FROM raw_materials WHERE id = $1").bind(mid).fetch_one(&mut *tx).await?;
+            let qp = d(qty);
+            let expiry = Some(today + Duration::days(exp));
+            let lot: Uuid = sqlx::query_scalar("INSERT INTO grn_lines (grn_id, raw_material_id, qty_purchase, qty_stock, lot_no, expiry_date) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id")
+                .bind(grn_id).bind(mid).bind(qp).bind(qp * spp).bind(lot_no).bind(expiry).fetch_one(&mut *tx).await?;
+            stock::post_all(&mut *tx, vec![Move::new(ItemType::Raw, mid, "RM_STORE", lot, qp * spp, "GRN").at(loc).reference("GRN", grn_id).by(Some(admin)).note(note(&grn_no)).expiry(expiry)])
+                .await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
+    }
+
+    // ---- finished goods and empty jars arrive by transfer from the plant ----
+    let jar = m.prod["MW-20L"];
+    let mut approved: HashMap<&'static str, Vec<Uuid>> = HashMap::new();
+    for code in ["MW-500", "MW-1000", "MW-20L"] {
+        let v: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM production_batches WHERE product_id = $1 AND qc_status = 'APPROVED' ORDER BY expiry_date, created_at, id")
+            .bind(m.prod[code]).fetch_all(&mut *tx).await?;
+        approved.insert(code, v);
+    }
+    let veh: Option<(Uuid, String)> = sqlx::query_as("SELECT id, reg_no FROM vehicles ORDER BY reg_no LIMIT 1").fetch_optional(&mut *tx).await?;
+    let Some((vid, vreg)) = veh else { return Ok(()) };
+    let (Some(b500), Some(b1000), Some(bjar)) = (approved["MW-500"].first().copied(), approved["MW-1000"].first().copied(), approved["MW-20L"].first().copied()) else {
+        tracing::warn!("seed-demo: no approved batches, skipping godown transfers");
+        return Ok(());
+    };
+    let b500b = approved["MW-500"].get(1).copied().unwrap_or(b500);
+    let line = |item: ItemType, id: Uuid, lot: Uuid, zone: &'static str, qty: i64, dmg: i64| TLine { item, item_id: id, lot, zone, qty: Decimal::from(qty), damaged: Decimal::from(dmg) };
+
+    // RECEIVED: plant -> North godown (500 ml batch 1, filled jars, empty jars); received by the restricted keeper
+    seed_transfer(&mut *tx, admin, ids.get("store_north").copied(), MAIN_LOCATION, north, &[
+        line(ItemType::Product, m.prod["MW-500"], b500, "FG_READY", 80, 0),
+        line(ItemType::Product, jar, bjar, "FG_READY", 20, 0),
+        line(ItemType::Product, jar, NIL_LOT, "JAR_EMPTY", 30, 0),
+    ], true, 4, (vid, &vreg, "Ramesh Patil"), "plant to north godown").await?;
+    // RECEIVED: plant -> City godown, one damaged crate on arrival (booked into the City godown's scrap yard)
+    seed_transfer(&mut *tx, admin, Some(admin), MAIN_LOCATION, city, &[
+        line(ItemType::Product, m.prod["MW-500"], b500b, "FG_READY", 40, 0),
+        line(ItemType::Product, m.prod["MW-1000"], b1000, "FG_READY", 50, 1),
+        line(ItemType::Product, jar, NIL_LOT, "JAR_EMPTY", 20, 0),
+    ], true, 2, (vid, &vreg, "Ramesh Patil"), "plant to city godown").await?;
+    // IN_TRANSIT: plant -> City godown, not yet received (the TRANSIT location holds it)
+    seed_transfer(&mut *tx, admin, None, MAIN_LOCATION, city, &[
+        line(ItemType::Product, m.prod["MW-1000"], b1000, "FG_READY", 30, 0),
+    ], false, 0, (vid, &vreg, "Suresh Jadhav"), "plant to city godown, on the road").await?;
     Ok(())
 }
