@@ -28,6 +28,7 @@ pub struct Settings {
     pub scrap_warn_pct: i64,
     pub void_window_hours: i64,
     pub damage_warn_pct: i64,
+    pub jar_destroy_warn_pct: i64,
     pub ph_min: Decimal,
     pub ph_max: Decimal,
     pub tds_min: Decimal,
@@ -47,7 +48,7 @@ const SCHEMA: &[(&str, Kind)] = &[
     ("loading.default_crate_set_size", Kind::Int(1, 1000)), ("loading.strict_qc_lock", Kind::Bool),
     ("features.qr_labels", Kind::Bool), ("plant.utc_offset_minutes", Kind::Int(-720, 840)),
     ("entry.large_adjust_pct", Kind::Int(1, 1000)), ("production.scrap_warn_pct", Kind::Int(0, 100)),
-    ("loading.void_window_hours", Kind::Int(1, 720)), ("settle.damage_warn_pct", Kind::Int(0, 100)),
+    ("loading.void_window_hours", Kind::Int(1, 720)), ("settle.damage_warn_pct", Kind::Int(0, 100)), ("jars.destroy_warn_pct", Kind::Int(0, 100)),
     ("lab.ph_min", Kind::Num), ("lab.ph_max", Kind::Num), ("lab.tds_min", Kind::Num), ("lab.tds_max", Kind::Num),
 ];
 
@@ -68,7 +69,7 @@ impl Settings {
             qr_labels_enabled: m.get("features.qr_labels").and_then(Value::as_bool).unwrap_or(false),
             utc_offset_minutes: i("plant.utc_offset_minutes", 330),
             large_adjust_pct: i("entry.large_adjust_pct", 20), scrap_warn_pct: i("production.scrap_warn_pct", 5),
-            void_window_hours: i("loading.void_window_hours", 12), damage_warn_pct: i("settle.damage_warn_pct", 10),
+            void_window_hours: i("loading.void_window_hours", 12), damage_warn_pct: i("settle.damage_warn_pct", 10), jar_destroy_warn_pct: i("jars.destroy_warn_pct", 3),
             ph_min: n("lab.ph_min", 6), ph_max: n("lab.ph_max", 9), tds_min: n("lab.tds_min", 50), tds_max: n("lab.tds_max", 500),
         }
     }

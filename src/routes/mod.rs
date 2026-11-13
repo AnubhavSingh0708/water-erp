@@ -60,21 +60,35 @@ async fn qr_feature_gate(State(s): State<AppState>, req: Request, next: Next) ->
 pub async fn idempotency(State(s): State<AppState>, req: Request, next: Next) -> Result<Response, AppError> {
     if !matches!(*req.method(), Method::POST | Method::PUT | Method::PATCH | Method::DELETE) { return Ok(next.run(req).await); }
     let Some(key) = req.headers().get("idempotency-key").and_then(|v| v.to_str().ok()).map(str::to_owned) else { return Ok(next.run(req).await) };
+    // dry runs never touch the key (a dry run followed by the real submit must run the handler)
+    if req.uri().query().map_or(false, |q| q.split('&').any(|p| p == "dry_run" || p.starts_with("dry_run="))) { return Ok(next.run(req).await); }
     if key.len() < 8 || key.len() > 64 || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         return Err(AppError::field("Idempotency-Key", "must be 8-64 characters (letters, digits, - _)"));
     }
     let user = req.extensions().get::<auth::AuthUser>().ok_or(AppError::Unauthorized)?.id;
-    let (method, path) = (req.method().to_string(), req.uri().path().to_string());
-    // take over keys abandoned by a crashed request (> 2 minutes without a stored response)
-    sqlx::query("DELETE FROM idempotency_keys WHERE user_id=$1 AND key=$2 AND status IS NULL AND created_at < now() - interval '2 minutes'")
+    // fingerprint the full request so a reused key with a different body (e.g. confirm:true added) is detected
+    let (parts, body) = req.into_parts();
+    let body_bytes = axum::body::to_bytes(body, 2 * 1024 * 1024).await.map_err(|_| AppError::bad("request body too large"))?;
+    let method = parts.method.to_string();
+    let path = parts.uri.path().to_string();
+    let fp = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(method.as_bytes()); h.update(b"|"); h.update(path.as_bytes()); h.update(b"|");
+        h.update(parts.uri.query().unwrap_or("").as_bytes()); h.update(b"|"); h.update(&body_bytes);
+        hex::encode(h.finalize())
+    };
+    let req = Request::from_parts(parts, axum::body::Body::from(body_bytes));
+    // take over keys abandoned by a crashed/timed-out request (30 s request timeout => 35 s)
+    sqlx::query("DELETE FROM idempotency_keys WHERE user_id=$1 AND key=$2 AND status IS NULL AND created_at < now() - interval '35 seconds'")
         .bind(user).bind(&key).execute(&s.db).await?;
-    let inserted = sqlx::query("INSERT INTO idempotency_keys (user_id, key, method, path) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING")
-        .bind(user).bind(&key).bind(&method).bind(&path).execute(&s.db).await?.rows_affected();
+    let inserted = sqlx::query("INSERT INTO idempotency_keys (user_id, key, method, path, fingerprint) VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING")
+        .bind(user).bind(&key).bind(&method).bind(&path).bind(&fp).execute(&s.db).await?.rows_affected();
     if inserted == 0 {
-        let row: (String, String, Option<i32>, Option<Vec<u8>>) =
-            sqlx::query_as("SELECT method, path, status, body FROM idempotency_keys WHERE user_id=$1 AND key=$2").bind(user).bind(&key).fetch_one(&s.db).await?;
-        if row.0 != method || row.1 != path { return Err(AppError::conflict("IDEMPOTENCY_CONFLICT", "Idempotency key was used for a different request")); }
-        return match (row.2, row.3) {
+        let row: (String, Option<i32>, Option<Vec<u8>>) =
+            sqlx::query_as("SELECT fingerprint, status, body FROM idempotency_keys WHERE user_id=$1 AND key=$2").bind(user).bind(&key).fetch_one(&s.db).await?;
+        if row.0 != fp { return Err(AppError::conflict("IDEMPOTENCY_CONFLICT", "Idempotency key was already used for a different request")); }
+        return match (row.1, row.2) {
             (Some(st), Some(body)) => {
                 let mut r = Response::new(axum::body::Body::from(body));
                 *r.status_mut() = axum::http::StatusCode::from_u16(st as u16).unwrap_or(axum::http::StatusCode::OK);
@@ -91,11 +105,12 @@ pub async fn idempotency(State(s): State<AppState>, req: Request, next: Next) ->
     let resp = next.run(req).await;
     let (parts, body) = resp.into_parts();
     let bytes = axum::body::to_bytes(body, 512 * 1024).await.map_err(|e| AppError::Internal(anyhow::anyhow!("idempotency body: {e}")))?;
-    if parts.status.is_server_error() {
-        let _ = sqlx::query("DELETE FROM idempotency_keys WHERE user_id=$1 AND key=$2").bind(user).bind(&key).execute(&s.db).await;
-    } else {
+    if parts.status.is_success() {
         sqlx::query("UPDATE idempotency_keys SET status=$3, body=$4 WHERE user_id=$1 AND key=$2")
             .bind(user).bind(&key).bind(parts.status.as_u16() as i32).bind(bytes.as_ref()).execute(&s.db).await?;
+    } else {
+        // only successes are replayed: validation errors, CONFIRM_REQUIRED, 5xx ... must be re-runnable with the same key
+        let _ = sqlx::query("DELETE FROM idempotency_keys WHERE user_id=$1 AND key=$2").bind(user).bind(&key).execute(&s.db).await;
     }
     Ok(Response::from_parts(parts, axum::body::Body::from(bytes)))
 }

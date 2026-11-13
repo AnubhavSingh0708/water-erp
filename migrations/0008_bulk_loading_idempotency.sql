@@ -15,6 +15,7 @@ CREATE TABLE idempotency_keys (
     key        TEXT NOT NULL,
     method     TEXT NOT NULL,
     path       TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,   -- sha256(method|path|query|body): same key + different request => IDEMPOTENCY_CONFLICT
     status     INT,
     body       BYTEA,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),

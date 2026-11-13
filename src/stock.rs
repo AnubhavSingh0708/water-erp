@@ -140,3 +140,59 @@ pub async fn available(db: &mut PgConnection, item_type: ItemType, item_id: Uuid
         .bind(item_type.as_str()).bind(item_id).bind(zone).fetch_one(&mut *db).await?;
     Ok(q.unwrap_or_default())
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Reservation-aware availability of finished goods. Crates added to a trip that is still LOADING are *reserved*:
+// they have not left FG_READY yet (that happens at gate pass) but nobody else may take them. EVERY flow that deducts
+// finished goods from FG_READY (dispatch notes, jar counter issue, write-offs, scrap transfers, negative adjustments)
+// must use these helpers instead of computing availability itself.
+// ---------------------------------------------------------------------------------------------------------------
+
+/// Crates of `batch_id` held by trips in status LOADING (all trips, including the caller's own).
+pub async fn fg_reserved(conn: &mut PgConnection, batch_id: Uuid) -> AppResult<Decimal> {
+    let r: Option<Decimal> = sqlx::query_scalar(
+        "SELECT SUM(ti.crates)::numeric FROM trip_items ti JOIN loading_trips t ON t.id = ti.trip_id
+         WHERE ti.batch_id = $1 AND t.status = 'LOADING'")
+        .bind(batch_id).fetch_one(&mut *conn).await?;
+    Ok(r.unwrap_or_default())
+}
+
+/// `FG_READY` quantity of the batch minus reservations (may be negative only if data was corrupted).
+pub async fn fg_free(conn: &mut PgConnection, product_id: Uuid, batch_id: Uuid) -> AppResult<Decimal> {
+    let have = sqlx::query_scalar::<_, Decimal>(
+        "SELECT COALESCE(SUM(qty),0) FROM stock_balances WHERE item_type='PRODUCT' AND item_id=$1 AND zone='FG_READY' AND lot_id=$2")
+        .bind(product_id).bind(batch_id).fetch_one(&mut *conn).await?;
+    Ok(have - fg_reserved(&mut *conn, batch_id).await?)
+}
+
+/// FEFO-allocate `crates` of a product from APPROVED batches' *free* FG_READY stock. Locks the batch rows
+/// (`FOR UPDATE`) so concurrent allocators on the same batch serialise. Returns `(batch_id, crates)`; does NOT move stock –
+/// the caller then posts the ledger rows (or adds trip items) inside the same transaction.
+pub async fn allocate_free_fefo(conn: &mut PgConnection, product_id: Uuid, crates: i64) -> AppResult<Vec<(Uuid, i64)>> {
+    let rows = sqlx::query(
+        "SELECT b.id, sb.qty,
+                COALESCE((SELECT SUM(ti.crates) FROM trip_items ti JOIN loading_trips t ON t.id = ti.trip_id
+                          WHERE ti.batch_id = b.id AND t.status = 'LOADING'), 0)::numeric AS reserved
+         FROM production_batches b
+         JOIN stock_balances sb ON sb.item_type='PRODUCT' AND sb.item_id=b.product_id AND sb.zone='FG_READY' AND sb.lot_id=b.id
+         WHERE b.product_id = $1 AND b.qc_status = 'APPROVED' AND sb.qty > 0
+         ORDER BY b.expiry_date ASC, b.created_at ASC, b.id ASC
+         FOR UPDATE OF b")
+        .bind(product_id).fetch_all(&mut *conn).await?;
+    let mut left = crates;
+    let mut out = vec![];
+    let mut total_free = Decimal::ZERO;
+    for r in &rows {
+        let free: Decimal = r.get::<Decimal, _>("qty") - r.get::<Decimal, _>("reserved");
+        if free > Decimal::ZERO { total_free += free; }
+        if left == 0 || free <= Decimal::ZERO { continue; }
+        let take = free.floor().to_string().parse::<i64>().unwrap_or(0).min(left);
+        if take > 0 { out.push((r.get::<Uuid, _>("id"), take)); left -= take; }
+    }
+    if left > 0 {
+        return Err(AppError::conflict_with("INSUFFICIENT_STOCK",
+            format!("Only {} crates are free to load/dispatch (the rest is reserved by open loading trips or not QC-approved)", total_free.normalize()),
+            json!({ "product_id": product_id, "available": total_free, "required": crates })));
+    }
+    Ok(out)
+}

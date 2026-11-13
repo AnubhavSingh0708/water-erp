@@ -9,6 +9,10 @@ use water_erp::{auth, routes};
 #[derive(Clone)]
 struct Counter(Arc<AtomicUsize>);
 async fn bump(State(c): State<Counter>) -> Json<Value> { Json(json!({ "n": c.0.fetch_add(1, Ordering::SeqCst) + 1 })) }
+async fn needs_confirm(body: Option<Json<Value>>) -> Result<Json<Value>, water_erp::error::AppError> {
+    let ok = body.map_or(false, |b| b.0["confirm"] == json!(true));
+    if ok { Ok(Json(json!({"done": true}))) } else { Err(water_erp::error::AppError::confirm("Large quantity", vec!["10x usual".into()])) }
+}
 async fn boom() -> Result<Json<Value>, water_erp::error::AppError> { Err(water_erp::error::AppError::Unavailable) }
 async fn fail500() -> (StatusCode, Json<Value>) { (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({}))) }
 
@@ -16,15 +20,20 @@ fn probe_router(st: water_erp::state::AppState, c: Counter) -> Router {
     Router::new()
         .route("/api/probe", post(bump).with_state(c.clone()))
         .route("/api/probe2", post(bump).with_state(c))
+        .route("/api/confirm", post(needs_confirm))
         .route("/api/boom", post(boom))
         .route("/api/fail500", post(fail500))
         .layer(middleware::from_fn_with_state(st.clone(), routes::idempotency))
         .layer(middleware::from_fn_with_state(st, auth::auth_middleware))
 }
 async fn post_with(app: &Router, uri: &str, key: &str, idem: Option<&str>) -> (StatusCode, Value, Option<String>) {
+    post_body(app, uri, key, idem, None).await
+}
+async fn post_body(app: &Router, uri: &str, key: &str, idem: Option<&str>, body: Option<Value>) -> (StatusCode, Value, Option<String>) {
     let mut b = axum::http::Request::builder().method("POST").uri(uri).header("x-auth-key", key);
     if let Some(i) = idem { b = b.header("idempotency-key", i); }
-    let resp = app.clone().oneshot(b.body(axum::body::Body::empty()).unwrap()).await.unwrap();
+    let req = match body { Some(j) => b.header("content-type", "application/json").body(axum::body::Body::from(j.to_string())).unwrap(), None => b.body(axum::body::Body::empty()).unwrap() };
+    let resp = app.clone().oneshot(req).await.unwrap();
     let replay = resp.headers().get("idempotent-replay").map(|v| v.to_str().unwrap().to_string());
     let st = resp.status();
     let bytes = http_body_util::BodyExt::collect(resp.into_body()).await.unwrap().to_bytes();
@@ -129,4 +138,30 @@ async fn health_reports_shutdown_and_streams_are_told_to_reconnect(pool: PgPool)
     st.shutdown.trigger();
     let (s, b) = common::call(&app, "GET", "/api/health", None, None).await;
     assert_eq!((s, b["status"].as_str().unwrap()), (StatusCode::SERVICE_UNAVAILABLE, "shutting_down"));
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn confirm_resend_and_dry_run_work_with_the_same_key(pool: PgPool) {
+    let st = common::state(pool.clone()).await;
+    let c = Counter(Arc::new(AtomicUsize::new(0)));
+    let app = probe_router(st, c.clone());
+    let u = common::make_user(&pool, "u", true, &[], &[]).await;
+    let key = common::session_for(&pool, u).await;
+    // 1st attempt -> CONFIRM_REQUIRED (not stored), resend with confirm:true and the SAME key succeeds
+    let (s, b, _) = post_body(&app, "/api/confirm", &key, Some("confirm-flow-0001"), Some(json!({}))).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    assert_eq!(b["error"]["code"], "CONFIRM_REQUIRED");
+    assert_eq!(b["error"]["details"]["warnings"][0], "10x usual");
+    let (s, b, r) = post_body(&app, "/api/confirm", &key, Some("confirm-flow-0001"), Some(json!({"confirm": true}))).await;
+    assert_eq!((s, b["done"].as_bool(), r), (StatusCode::OK, Some(true), None));
+    // dry run then real, same key
+    let (s, _, _) = post_body(&app, "/api/probe?dry_run=1", &key, Some("dry-then-real-01"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _, r) = post_with(&app, "/api/probe", &key, Some("dry-then-real-01")).await;
+    assert_eq!((s, r), (StatusCode::OK, None));
+    assert_eq!(c.0.load(Ordering::SeqCst), 2, "dry run and real call must each run the handler");
+    // same key, different body after a success => conflict (never replay a different request's response)
+    let (s, b, _) = post_body(&app, "/api/confirm", &key, Some("confirm-flow-0001"), Some(json!({"confirm": true, "x": 1}))).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    assert_eq!(b["error"]["code"], "IDEMPOTENCY_CONFLICT");
 }
