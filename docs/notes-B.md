@@ -46,6 +46,12 @@ Branch: `worktree-agent-a9ddff392f4b1e8cf`. No migration (0012) and no new crate
 * None blocking. Optional: a `batch_material_usage.kind` column would make waste rows self-describing (waste is currently derived from the ledger `BATCH_WASTE` rows).
 * Test env tip: set `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0` – debug-info test binaries filled the 250 GB disk once and took the Postgres clusters down.
 
+## Contract question for the Lead
+Write-offs and count posts always need `confirm:true`, and that single flag also covers the "N crates are reserved by open loading trips" warning.
+In the normal flow (dry run -> user confirms -> real submit) a loader could reserve crates between the dry run and the submit, and the submit then succeeds
+without the user having seen the reservation warning (the trip's gate pass later fails with `INSUFFICIENT_STOCK`, which is visible). Options: a separate acknowledgement
+flag (e.g. `ack_reserved`) or a hard block for write-offs of reserved crates. Not changed – needs a contract decision.
+
 ## Known gaps
 * No inline reorder evaluation on batch/blow consumption beyond a best-effort spawned task after commit (the worker is authoritative).
 * Supplier returns do not reduce PO `qty_received` (a replacement delivery counts against the 110 % limit).

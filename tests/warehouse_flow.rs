@@ -262,6 +262,50 @@ async fn reservation_race_write_off_vs_loader_never_both_win(pool: PgPool) {
     check_invariants(&pool).await;
 }
 
+/// Same race, but against the REAL loading endpoint (`POST /api/loading/trips/{id}/items`).
+#[sqlx::test(migrations = "./migrations")]
+async fn write_off_vs_real_loading_endpoint(pool: PgPool) {
+    let c = setup(pool.clone()).await;
+    let p = plant(&pool).await;
+    let trip = loading_trip(&pool).await;
+    let wo = |b: Uuid, qty: i64, confirm: bool| json!({ "item_type": "PRODUCT", "item_id": p.p500, "zone": "FG_READY", "lot_id": b, "qty": qty, "reason_code": "BREAKAGE", "note": "dropped pallet", "confirm": confirm });
+    // write-off first, then loading: the add-item must fail
+    let b1 = approved_batch(&pool, p.p500, 10).await;
+    let (s, _) = c.post("/api/warehouse/write-offs", wo(b1, 10, true)).await;
+    assert_eq!(s, 201);
+    let (s, e) = c.post(&format!("/api/loading/trips/{trip}/items"), json!({ "batch_id": b1, "crates": 5 })).await;
+    assert_eq!((s, code(&e)), (409, "INSUFFICIENT_STOCK"), "{e}");
+    // loading first, then write-off without confirm: warnings must name the reservation
+    let b2 = approved_batch(&pool, p.p500, 10).await;
+    let (s, v) = c.post(&format!("/api/loading/trips/{trip}/items"), json!({ "batch_id": b2, "crates": 8 })).await;
+    assert_eq!(s, 201, "{v}");
+    let (s, e) = c.post("/api/warehouse/write-offs", wo(b2, 5, false)).await;
+    assert_eq!((s, code(&e)), (409, "CONFIRM_REQUIRED"), "{e}");
+    assert!(e["error"]["details"]["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("reserved")), "{e}");
+    // concurrent: a non-confirmed adjustment vs the real loader never both win
+    sqlx::query("UPDATE system_settings SET value='1000' WHERE key='entry.large_adjust_pct'").execute(&pool).await.unwrap();
+    c.st.settings.reload(&pool).await.unwrap();
+    let mut both = 0;
+    for round in 0..10 {
+        let b = approved_batch(&pool, p.p500, 100).await;
+        let (a1, k1) = (c.app.clone(), c.key.clone());
+        let (a2, k2) = (c.app.clone(), c.key.clone());
+        let adj = tokio::spawn(async move { call(&a1, "POST", "/api/warehouse/adjustments", Some(&k1),
+            Some(json!({ "item_type": "PRODUCT", "item_id": p.p500, "zone": "FG_READY", "lot_id": b, "delta": -60, "reason": format!("real race {round}") }))).await });
+        let load = tokio::spawn(async move { call(&a2, "POST", &format!("/api/loading/trips/{trip}/items"), Some(&k2), Some(json!({ "batch_id": b, "crates": 60 }))).await });
+        let (s1, v1) = adj.await.unwrap();
+        let (s2, v2) = load.await.unwrap();
+        assert!(s1 == 201 || code(&v1) == "CONFIRM_REQUIRED", "{s1} {v1}");
+        assert!(s2 == 201 || code(&v2) == "INSUFFICIENT_STOCK", "{s2} {v2}");
+        if s1 == 201 && s2 == 201 { both += 1; }
+        let fg = lot_qty(&pool, "PRODUCT", p.p500, "FG_READY", b).await;
+        let reserved = stock::fg_reserved(&mut pool.acquire().await.unwrap(), b).await.unwrap();
+        assert!(reserved <= fg, "round {round}: reserved {reserved} > FG_READY {fg}");
+    }
+    assert_eq!(both, 0);
+    check_invariants(&pool).await;
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn physical_count_flow(pool: PgPool) {
     let c = setup(pool.clone()).await;

@@ -229,7 +229,7 @@ pub async fn void(State(s): State<AppState>, user: AuthUser, Id(id): Id, Q(dq): 
         sqlx::query("SELECT id FROM po_lines WHERE po_id=$1 ORDER BY id FOR UPDATE").bind(po).execute(&mut *tx).await?;
     }
     let lines = sqlx::query("SELECT l.id, l.raw_material_id, l.qty_stock, l.qty_purchase, l.po_line_id, m.name FROM grn_lines l JOIN raw_materials m ON m.id = l.raw_material_id
-                             WHERE l.grn_id=$1 ORDER BY l.id").bind(id).fetch_all(&mut *tx).await?;
+                             WHERE l.grn_id=$1 ORDER BY l.raw_material_id, l.id").bind(id).fetch_all(&mut *tx).await?;
     let mut moves = vec![];
     for l in &lines {
         let lot: Uuid = l.get("id");
