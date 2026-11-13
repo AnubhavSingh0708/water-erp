@@ -1,14 +1,14 @@
 //! Availability, trips (create/list/detail/cancel), trip items (bulk by product/batch, or by QR set), loading summary.
 use super::common::*;
 use crate::{
-    alerts, audit,
+    audit,
     auth::AuthUser,
     error::{AppError, AppResult},
     state::AppState,
     stock, util, validate,
 };
 use axum::{extract::State, http::StatusCode, response::{IntoResponse, Response}, Json};
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::NaiveDate;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -178,14 +178,14 @@ pub struct AddItem {
     crates: Option<i64>,
 }
 
-pub async fn add_item(State(st): State<AppState>, user: AuthUser, ids: Ids, Q(dq): Q<DryQ>, J(b): J<AddItem>) -> AppResult<Response> {
+pub async fn add_item(State(st): State<AppState>, user: AuthUser, headers: axum::http::HeaderMap, ids: Ids, Q(dq): Q<DryQ>, J(b): J<AddItem>) -> AppResult<Response> {
     let mut tx = st.db.begin().await?;
     let mut fx = Fx::default();
-    let out = add_item_core(&mut tx, &st, &user, id1(&ids)?, b, &mut fx).await?;
+    let out = add_item_core(&mut tx, &st, &headers, &user, id1(&ids)?, b, &mut fx).await?;
     conclude(tx, dq.on(), fx, StatusCode::CREATED, out).await
 }
 
-async fn add_item_core(tx: &mut sqlx::PgConnection, st: &AppState, user: &AuthUser, trip_id: Uuid, b: AddItem, fx: &mut Fx) -> AppResult<Value> {
+async fn add_item_core(tx: &mut sqlx::PgConnection, st: &AppState, headers: &axum::http::HeaderMap, user: &AuthUser, trip_id: Uuid, b: AddItem, fx: &mut Fx) -> AppResult<Value> {
     // 1. the trip row is locked first (global lock order: trip -> batches -> stock rows)
     let trip = lock_trip(tx, trip_id).await?;
     if trip.status != "LOADING" {
@@ -197,7 +197,7 @@ async fn add_item_core(tx: &mut sqlx::PgConnection, st: &AppState, user: &AuthUs
         if !st.settings.get().qr_labels_enabled {
             return Err(AppError::conflict("FEATURE_DISABLED", "QR labels are switched off. Load stock by product and batch instead."));
         }
-        return crate::routes::qr::add_set_to_trip(tx, st, user, &trip, code, b.crates, fx).await;
+        return crate::routes::qr::add_set_to_trip(tx, st, headers, user, &trip, code, b.crates, fx).await;
     }
     let n = b.crates.ok_or_else(|| AppError::field("crates", "is required"))?;
     validate::count("crates", n)?;
@@ -302,6 +302,3 @@ pub async fn cancel_trip(State(st): State<AppState>, user: AuthUser, ids: Ids, J
     Ok((StatusCode::OK, Json(out)).into_response())
 }
 
-// keep imports used by sibling modules
-#[allow(dead_code)]
-fn _unused(_: alerts::NewAlert<'_>, _: DateTime<Utc>) {}

@@ -187,7 +187,7 @@ pub fn restock_zone(qc_status: &str) -> &'static str {
     match qc_status { "APPROVED" => "FG_READY", "QUARANTINE" => "QC_QUARANTINE", _ => "SCRAP_YARD" }
 }
 
-pub struct Avail { pub on_hand: Decimal, pub reserved: Decimal, pub free: Decimal }
+pub struct Avail { pub on_hand: Decimal, pub free: Decimal }
 
 /// On-hand minus crates reserved by LOADING trips (including the caller's own trip) for the lot in its loadable zone.
 /// Call only after the batch row is locked and in a statement of its own.
@@ -200,7 +200,7 @@ pub async fn lot_avail(conn: &mut PgConnection, product_id: Uuid, batch_id: Uuid
             "SELECT COALESCE(SUM(qty),0) FROM stock_balances WHERE item_type='PRODUCT' AND item_id=$1 AND zone=$2 AND lot_id=$3")
             .bind(product_id).bind(zone).bind(batch_id).fetch_one(&mut *conn).await?
     };
-    Ok(Avail { on_hand, reserved, free: on_hand - reserved })
+    Ok(Avail { on_hand, free: on_hand - reserved })
 }
 
 /// The shared FEFO allocator reports decimals as strings; loading answers in whole crates everywhere.
