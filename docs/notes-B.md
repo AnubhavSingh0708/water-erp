@@ -42,6 +42,22 @@ Branch: `worktree-agent-a9ddff392f4b1e8cf`. No migration (0012) and no new crate
 11. Lists documented as "bare array" (`/api/raw-materials`, `/stock`, POs, recommendations, ref data) are bounded to 500 rows; `?format=csv` bypasses the cap up to 50 000 rows.
 12. Extractor rejections (bad JSON, unknown field, bad query, bad id) always use the error envelope (`400 BAD_REQUEST` / `404`).
 
+## Godowns (API_REFERENCE 0.2-F)
+* Writes take `location_id` in the body (GRN, supplier return, adjustment, in-godown transfer, write-off, count create, blow run, batch) resolved with `util::resolve_location`
+  (omitted => user's single allowed godown, else MAIN; 403 when not allowed). Blow runs/batches additionally require `locations.is_production_site` (422 otherwise);
+  consumption/output happen at that site (`consume_fefo_at`, `Move::at`). QC approve/reject act at the batch's godown (caller must be allowed there, else 403).
+* Document-by-id endpoints (GRN, supplier return, write-off, count, batch, blow run, transfer) answer 403 when the caller may not use the document's godown.
+* Reads: `?location_id=<id>` (403 if not allowed), `all` = every godown the caller may use, omitted = resolved default (MAIN / the single allowed godown). Rows carry `location_id`/`location_name`.
+  **List endpoints of documents** (grns, supplier-returns, write-offs, counts, batches, blow-runs, qc/batches, production summary, godown transfers) default to *all allowed godowns* and silently filter.
+  `GET /warehouse/stock/summary` always returns `by_location[]` for every allowed godown plus `in_transit[]` (open transfers visible to the caller).
+  Dashboard: default scope = all allowed godowns (`?location_id=` narrows stock numbers); adds `by_location[]`, `in_transit_warnings[]` (IN_TRANSIT > 48 h) and `kpis.in_transit_transfers`.
+  `low=1` on the stock view compares the item total over the selected godowns with the (global) minimum.
+* Reorder engine: totals RM_STORE over all real godowns (TRANSIT excluded: goods on the road are not in a store); recommendations carry `stock_by_location[]`. Expiry alerts aggregate a lot over godowns (key unchanged).
+* `/api/godowns/transfers` (page `warehouse`): create (stock -> TRANSIT, `GODOWN_TRANSFER_OUT`), receive (received -> destination same zone `GODOWN_TRANSFER_IN`, damaged -> destination SCRAP_YARD `TRANSIT_DAMAGE`,
+  shortage removed from TRANSIT `TRANSFER_SHORT` with line note + `confirm`), cancel (`reason` + `confirm`, back to source `GODOWN_TRANSFER_CANCEL`), list/detail, `?dry_run=1`. FG lots must be APPROVED; batch rows are locked first and
+  reservations use `fg_free_at` (reserved crates => 409 `INSUFFICIENT_STOCK`, hard stop, not confirmable); expired / <= 7 days lots need `confirm`. Receive/cancel are serialised by the transfer row lock (double submit => `INVALID_STATE`).
+  Sender needs access to the source godown, receiver to the destination godown; the destination only has to be an active selectable godown at creation time.
+
 ## Requests to the Lead
 * None blocking. Optional: a `batch_material_usage.kind` column would make waste rows self-describing (waste is currently derived from the ledger `BATCH_WASTE` rows).
 * Test env tip: set `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0` – debug-info test binaries filled the 250 GB disk once and took the Postgres clusters down.

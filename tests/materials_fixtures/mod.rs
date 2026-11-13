@@ -90,8 +90,45 @@ pub async fn lot_qty(pool: &PgPool, it: &str, item: Uuid, zone: &str, lot: Uuid)
 pub async fn check_invariants(pool: &PgPool) {
     let bad: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM stock_balances b WHERE b.qty <> COALESCE((SELECT SUM(l.qty_delta) FROM stock_ledger l
-           WHERE l.item_type=b.item_type AND l.item_id=b.item_id AND l.zone=b.zone AND l.lot_id=b.lot_id), 0) OR b.qty < 0").fetch_one(pool).await.unwrap();
+           WHERE l.item_type=b.item_type AND l.item_id=b.item_id AND l.zone=b.zone AND l.lot_id=b.lot_id AND l.location_id=b.location_id), 0) OR b.qty < 0").fetch_one(pool).await.unwrap();
     assert_eq!(bad, 0, "stock_balances disagree with the ledger");
+}
+
+pub async fn godown(pool: &PgPool, code: &str, production: bool) -> Uuid {
+    sqlx::query_scalar("INSERT INTO locations (code, name, kind, is_production_site) VALUES ($1,$1,'GODOWN',$2) RETURNING id").bind(code).bind(production).fetch_one(pool).await.unwrap()
+}
+
+pub async fn put_stock_at(pool: &PgPool, loc: Uuid, it: ItemType, item: Uuid, zone: &'static str, lot: Uuid, qty: &str, expiry: Option<chrono::NaiveDate>) {
+    let mut tx = pool.begin().await.unwrap();
+    stock::post_all(&mut tx, vec![Move::new(it, item, zone, lot, d(qty), "GRN").at(loc).expiry(expiry)]).await.unwrap();
+    tx.commit().await.unwrap();
+}
+
+pub async fn qty_at(pool: &PgPool, loc: Uuid, it: &str, item: Uuid, zone: &str) -> Decimal {
+    sqlx::query_scalar("SELECT COALESCE(SUM(qty),0) FROM stock_balances WHERE location_id=$1 AND item_type=$2 AND item_id=$3 AND zone=$4").bind(loc).bind(it).bind(item).bind(zone).fetch_one(pool).await.unwrap()
+}
+
+/// Sum over every godown INCLUDING the system TRANSIT location.
+pub async fn qty_everywhere(pool: &PgPool, it: &str, item: Uuid) -> Decimal {
+    sqlx::query_scalar("SELECT COALESCE(SUM(qty),0) FROM stock_balances WHERE item_type=$1 AND item_id=$2").bind(it).bind(item).fetch_one(pool).await.unwrap()
+}
+
+/// TRANSIT balances must equal the open (IN_TRANSIT) transfer lines.
+pub async fn check_transit(pool: &PgPool) {
+    let bad: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM (
+           SELECT item_type, item_id, zone, lot_id, SUM(qty) AS q FROM stock_balances WHERE location_id = '00000000-0000-0000-0000-000000000002' GROUP BY 1,2,3,4) b
+         FULL JOIN (SELECT l.item_type, l.item_id, l.zone, l.lot_id, SUM(l.qty_sent) AS q FROM godown_transfer_lines l JOIN godown_transfers t ON t.id=l.transfer_id
+                    WHERE t.status='IN_TRANSIT' GROUP BY 1,2,3,4) o USING (item_type, item_id, zone, lot_id)
+         WHERE COALESCE(b.q,0) <> COALESCE(o.q,0)").fetch_one(pool).await.unwrap();
+    assert_eq!(bad, 0, "TRANSIT balances disagree with the open transfers");
+}
+
+/// A user limited to the given godowns.
+pub async fn restricted(c: &Ctx, name: &str, pages: &[&str], locs: &[Uuid]) -> String {
+    let key = c.user(name, pages).await;
+    sqlx::query("UPDATE users SET allowed_location_ids = $2 WHERE username = $1").bind(name).bind(serde_json::json!(locs)).execute(&c.pool).await.unwrap();
+    key
 }
 
 pub fn future(days: i64) -> chrono::NaiveDate { chrono::Utc::now().date_naive() + chrono::Duration::days(days) }
