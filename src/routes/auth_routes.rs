@@ -42,6 +42,7 @@ pub fn me_json(u: &AuthUser) -> Value {
         "id": u.id, "username": u.username, "full_name": u.full_name, "is_admin": u.is_admin,
         "allowed_pages": if u.is_admin { all_pages() } else { u.allowed_pages.clone() },
         "subscribed_notifications": u.subscribed_notifications,
+        "allowed_location_ids": u.allowed_location_ids,
     })
 }
 

@@ -5,6 +5,8 @@ use axum::Router;
 
 #[path = "admin_common.rs"]
 pub mod common;
+#[path = "admin_locations.rs"]
+mod locations;
 #[path = "admin_master.rs"]
 pub mod master;
 #[path = "admin_products.rs"]
@@ -21,5 +23,6 @@ pub fn router() -> Router<AppState> {
         .merge(settings_audit::router())
         .merge(users::router())
         .merge(master::router())
+        .merge(locations::router())
         .merge(products::router())
 }

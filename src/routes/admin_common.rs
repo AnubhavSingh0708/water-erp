@@ -199,6 +199,27 @@ pub fn check_subscriptions(field: &str, subs: &[String]) -> AppResult<Vec<String
     Ok(out)
 }
 
+/// `allowed_location_ids`: at most 50 distinct ids, each an existing active, non-TRANSIT location (`[]` = every godown).
+/// The rows are share-locked so a concurrent deactivation cannot slip in between check and write.
+pub async fn check_locations(conn: &mut PgConnection, field: &str, ids: &[Uuid]) -> AppResult<Vec<Uuid>> {
+    if ids.len() > 50 { return Err(AppError::field(field, "too many entries (max 50)")); }
+    let mut out: Vec<Uuid> = vec![];
+    for id in ids { if !out.contains(id) { out.push(*id); } }
+    if out.is_empty() { return Ok(out); }
+    let rows: Vec<(Uuid, String, bool)> = sqlx::query_as("SELECT id, kind, is_active FROM locations WHERE id = ANY($1) ORDER BY id FOR SHARE")
+        .bind(&out).fetch_all(&mut *conn).await?;
+    for id in &out {
+        match rows.iter().find(|r| r.0 == *id) {
+            None => return Err(AppError::field(field, &format!("unknown location {id}"))),
+            Some((_, kind, active)) => {
+                if kind == "TRANSIT" { return Err(AppError::field(field, "the TRANSIT location cannot be assigned")); }
+                if !active { return Err(AppError::field(field, &format!("location {id} is inactive"))); }
+            }
+        }
+    }
+    Ok(out)
+}
+
 pub fn all_pages() -> Vec<String> { PAGES.iter().map(|s| s.to_string()).collect() }
 
 // ---------------------------------------------------------------------------------------------------------------------
