@@ -293,3 +293,15 @@ pub async fn list_scope(conn: &mut PgConnection, user: &crate::auth::AuthUser, r
         Some(_) => read_locations(conn, user, raw).await,
     }
 }
+
+/// Hard block (`409 RESERVED_STOCK`, never overridable): the stock would drop below the crates reserved by open LOADING trips of that godown.
+pub async fn reserved_error(conn: &mut PgConnection, loc: Uuid, batch: Uuid, reserved: Decimal) -> AppError {
+    let rows = sqlx::query_as::<_, (String, i64)>(
+        "SELECT t.trip_no, SUM(ti.crates)::bigint FROM trip_items ti JOIN loading_trips t ON t.id = ti.trip_id
+         WHERE ti.batch_id = $1 AND t.status = 'LOADING' AND t.location_id = $2 GROUP BY t.trip_no ORDER BY t.trip_no")
+        .bind(batch).bind(loc).fetch_all(&mut *conn).await.unwrap_or_default();
+    let nos: Vec<String> = rows.iter().map(|r| r.0.clone()).collect();
+    AppError::conflict_with("RESERVED_STOCK",
+        format!("{} crates are reserved by open loading trips ({}) - remove them from the trip first", reserved.normalize(), nos.join(", ")),
+        json!({ "batch_id": batch, "location_id": loc, "reserved": reserved, "trips": rows.iter().map(|r| json!({ "trip_no": r.0, "crates": r.1 })).collect::<Vec<_>>() }))
+}

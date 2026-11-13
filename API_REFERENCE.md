@@ -24,6 +24,7 @@ Schema: `migrations/0001..0010` (Lead-owned). Lead owns 0001-0010 (already appli
 | 409 | `DUPLICATE`, `IN_USE`, `RETRY` | unique violation, referenced row, deadlock-retry |
 | 409 | `INSUFFICIENT_STOCK` | `details:{available,required,zone,…}` (batch creation: `details.shortages[]`) |
 | 409 | `QC_LOCKED` | batch/set is not APPROVED (strict lock) |
+| 409 | `RESERVED_STOCK` | write-off / scrap transfer / negative adjustment / count post / godown transfer would take FG_READY below the crates reserved by open LOADING trips; `details:{batch_id,location_id,reserved,trips:[{trip_no,crates}]}`; never overridable (not by `confirm`, not by Admin) – remove the crates from the trip first |
 | 409 | `CAPACITY_EXCEEDED` | vehicle capacity |
 | 409 | `CONFIRM_REQUIRED`, `IDEMPOTENCY_CONFLICT`, `IN_PROGRESS`, `FEATURE_DISABLED` | see §0.2 |
 | 503 | `UNAVAILABLE` | database/pool unreachable; nothing saved |

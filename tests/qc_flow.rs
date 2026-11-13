@@ -173,3 +173,29 @@ async fn qc_hard_lock_cannot_be_bypassed_through_warehouse(pool: PgPool) {
     let (s, _) = call(&c.app, "POST", &format!("/api/qc/batches/{b}/approve"), Some(&nobody), Some(json!({}))).await;
     assert_eq!(s, 403);
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn rejecting_a_returnable_batch_writes_a_fleet_destroyed_event(pool: PgPool) {
+    let c = setup(pool.clone()).await;
+    let p = plant(&pool).await;
+    stock_plant(&pool, &p).await;
+    fresh_water_log(&pool).await;
+    let jar = product(&pool, "JAR20", "RETURNABLE", Some(20000), 1, Some(30)).await;
+    bom(&pool, jar, p.cap, "1", "RM_STORE", "PER_CRATE").await;
+    put_stock(&pool, ItemType::Product, jar, "JAR_CLEAN", Uuid::nil(), "50", None).await;
+    let (s, b) = c.post("/api/production/batches", json!({ "product_id": jar, "crates": 20, "shift": "DAY" })).await;
+    assert_eq!(s, 201, "{b}");
+    let (s, v) = c.post(&format!("/api/qc/batches/{}/reject", b["id"].as_str().unwrap()), json!({ "reason": "taste off-spec" })).await;
+    assert_eq!(s, 200, "{v}");
+    let (ev, qty, reason, loc, note, site): (String, i32, String, String, String, Uuid) = sqlx::query_as(
+        "SELECT event_type, qty, reason_code, location, note, location_id FROM jar_fleet_events WHERE product_id=$1").bind(jar).fetch_one(&pool).await.unwrap();
+    assert_eq!((ev.as_str(), qty, reason.as_str(), loc.as_str()), ("DESTROYED", 20, "OTHER", "PLANT_CLEAN"));
+    assert!(note.starts_with("QC reject "));
+    assert_eq!(site, Uuid::from_u128(1));
+    // a bottled batch writes none
+    let (_, b2) = c.post("/api/production/batches", json!({ "product_id": p.p500, "crates": 5, "shift": "DAY", "confirm": true })).await;
+    c.post(&format!("/api/qc/batches/{}/reject", b2["id"].as_str().unwrap()), json!({ "reason": "label misprint" })).await;
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM jar_fleet_events").fetch_one(&pool).await.unwrap();
+    assert_eq!(n, 1);
+    check_invariants(&pool).await;
+}

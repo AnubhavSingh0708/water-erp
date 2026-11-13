@@ -315,8 +315,8 @@ async fn qc_lots_and_reserved_crates_cannot_be_transferred(pool: PgPool) {
     let trip: Uuid = sqlx::query_scalar("INSERT INTO loading_trips (trip_no, vehicle_id, capacity_crates, location_id) VALUES ('T1', $1, 500, $2) RETURNING id").bind(veh).bind(g1).fetch_one(&pool).await.unwrap();
     sqlx::query("INSERT INTO trip_items (trip_id, batch_id, product_id, crates) VALUES ($1,$2,$3,80)").bind(trip).bind(b).bind(p.p500).execute(&pool).await.unwrap();
     let (s, e) = c.post("/api/godowns/transfers", tf(g1, g2, vec![prod(b, 30)])).await;
-    assert_eq!((s, code(&e)), (409, "INSUFFICIENT_STOCK"), "{e}");
-    assert!(e["error"]["message"].as_str().unwrap().contains("reserved"));
+    assert_eq!((s, code(&e)), (409, "RESERVED_STOCK"), "{e}");
+    assert_eq!(e["error"]["details"]["trips"][0]["trip_no"], "T1");
     let (s, t) = c.post("/api/godowns/transfers", tf(g1, g2, vec![prod(b, 20)])).await;
     assert_eq!(s, 201, "{t}");
     assert_eq!(qty_at(&pool, g1, "PRODUCT", p.p500, "FG_READY").await, d("85"));

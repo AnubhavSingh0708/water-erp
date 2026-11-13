@@ -298,3 +298,37 @@ async fn page_access_filters_pagination_and_injection(pool: PgPool) {
     assert!(body.contains("\"'=HYPERLINK(\"\"http://evil\"\")\""), "{body}");
     assert!(!body.contains(",=HYPERLINK"));
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn supplier_return_against_a_grn_reopens_the_po_line(pool: PgPool) {
+    let c = setup(pool.clone()).await;
+    let sup = supplier(&pool, "S1", 5).await;
+    let m = material(&pool, "M1", "CAP", "100", "0", Some(sup)).await;
+    let (_, po) = c.post("/api/raw-materials/purchase-orders", json!({ "supplier_id": sup, "lines": [{ "raw_material_id": m, "qty_ordered": 10 }] })).await;
+    let po_id = po["id"].as_str().unwrap().to_string();
+    let (s, g) = c.post("/api/raw-materials/grns", json!({ "po_id": po_id, "supplier_id": sup, "challan_no": "X1", "lines": [{ "raw_material_id": m, "qty_purchase": 10 }] })).await;
+    assert_eq!(s, 201, "{g}");
+    let (_, p) = c.get(&format!("/api/raw-materials/purchase-orders/{po_id}")).await;
+    assert_eq!((p["status"].clone(), dv(&p["lines"][0]["qty_received"])), (json!("RECEIVED"), d("10")));
+    // return 250 stock units (= 2.5 purchase units) tied to the GRN
+    let (s, r) = c.post("/api/raw-materials/supplier-returns", json!({ "supplier_id": sup, "grn_id": g["id"], "lines": [{ "raw_material_id": m, "lot_id": g["lines"][0]["lot_id"], "qty_stock": 250, "reason": "wet cartons" }] })).await;
+    assert_eq!(s, 201, "{r}");
+    let (_, p) = c.get(&format!("/api/raw-materials/purchase-orders/{po_id}")).await;
+    assert_eq!((p["status"].clone(), dv(&p["lines"][0]["qty_received"])), (json!("PARTIAL"), d("7.5")));
+    // a dry run changes nothing
+    let (s, _) = c.post("/api/raw-materials/supplier-returns?dry_run=1", json!({ "supplier_id": sup, "grn_id": g["id"], "lines": [{ "raw_material_id": m, "lot_id": g["lines"][0]["lot_id"], "qty_stock": 100, "reason": "wet cartons" }] })).await;
+    assert_eq!(s, 200);
+    let (_, p) = c.get(&format!("/api/raw-materials/purchase-orders/{po_id}")).await;
+    assert_eq!(dv(&p["lines"][0]["qty_received"]), d("7.5"));
+    // a replacement delivery of the returned quantity completes the PO again
+    let (s, _) = c.post("/api/raw-materials/grns", json!({ "po_id": po_id, "supplier_id": sup, "challan_no": "X2", "lines": [{ "raw_material_id": m, "qty_purchase": "2.5" }] })).await;
+    assert_eq!(s, 201);
+    let (_, p) = c.get(&format!("/api/raw-materials/purchase-orders/{po_id}")).await;
+    assert_eq!(p["status"], "RECEIVED");
+    // a return without a GRN reference leaves the PO alone
+    let (s, _) = c.post("/api/raw-materials/supplier-returns", json!({ "supplier_id": sup, "lines": [{ "raw_material_id": m, "lot_id": g["lines"][0]["lot_id"], "qty_stock": 100, "reason": "wet cartons" }] })).await;
+    assert_eq!(s, 201);
+    let (_, p) = c.get(&format!("/api/raw-materials/purchase-orders/{po_id}")).await;
+    assert_eq!(dv(&p["lines"][0]["qty_received"]), d("10"));
+    check_invariants(&pool).await;
+}

@@ -73,13 +73,13 @@ fn bounded(field: &str, d: &Option<D>, hi: i64) -> AppResult<Option<Decimal>> {
     }
 }
 
-struct Locked { loc: Uuid, status: String, product_id: Uuid, batch_no: String, crates: i32, product_name: String }
+struct Locked { returnable: bool, loc: Uuid, status: String, product_id: Uuid, batch_no: String, crates: i32, product_name: String }
 
 async fn lock_batch(tx: &mut sqlx::PgConnection, user: &AuthUser, id: Uuid) -> AppResult<Locked> {
-    let r = sqlx::query("SELECT b.location_id, b.qc_status, b.product_id, b.batch_no, b.crates, p.name FROM production_batches b JOIN products p ON p.id = b.product_id WHERE b.id=$1 FOR UPDATE OF b")
+    let r = sqlx::query("SELECT b.location_id, b.qc_status, b.product_id, b.batch_no, b.crates, p.name, p.kind FROM production_batches b JOIN products p ON p.id = b.product_id WHERE b.id=$1 FOR UPDATE OF b")
         .bind(id).fetch_optional(&mut *tx).await?.ok_or_else(|| AppError::not_found("batch"))?;
     user.require_location(r.get::<Uuid, _>("location_id"))?;
-    Ok(Locked { loc: r.get("location_id"), status: r.get("qc_status"), product_id: r.get("product_id"), batch_no: r.get("batch_no"), crates: r.get("crates"), product_name: r.get("name") })
+    Ok(Locked { returnable: r.get::<String, _>("kind") == "RETURNABLE", loc: r.get("location_id"), status: r.get("qc_status"), product_id: r.get("product_id"), batch_no: r.get("batch_no"), crates: r.get("crates"), product_name: r.get("name") })
 }
 
 fn require_quarantine(l: &Locked) -> AppResult<()> {
@@ -165,6 +165,12 @@ async fn reject(State(s): State<AppState>, user: AuthUser, Id(id): Id, J(b): J<R
         .bind(l.product_id).bind(id).bind(l.loc).fetch_one(&mut *tx).await?;
     if rem > Decimal::ZERO {
         stock::transfer_between(&mut tx, ItemType::Product, l.product_id, id, l.loc, "QC_QUARANTINE", l.loc, "SCRAP_YARD", rem, "QC_REJECT", Some("QC"), Some(id), Some(user.id), &format!("QC rejected {}: {reason}", l.batch_no)).await?;
+    }
+    if l.returnable && rem > Decimal::ZERO {
+        // the filled containers of a rejected batch leave the fleet: keep the fleet analytics true
+        let q = rem.trunc().to_string().parse::<i32>().map_err(|_| AppError::bad("quantity out of range"))?;
+        sqlx::query("INSERT INTO jar_fleet_events (product_id, event_type, qty, reason_code, location, note, created_by, location_id) VALUES ($1,'DESTROYED',$2,'OTHER','PLANT_CLEAN',$3,$4,$5)")
+            .bind(l.product_id).bind(q).bind(format!("QC reject {}", l.batch_no)).bind(user.id).bind(l.loc).execute(&mut *tx).await?;
     }
     sqlx::query("UPDATE production_batches SET qc_status='REJECTED', qc_decided_by=$2, qc_decided_at=now(), qc_notes=$3 WHERE id=$1").bind(id).bind(user.id).bind(&reason).execute(&mut *tx).await?;
     sqlx::query("UPDATE qr_crate_sets SET status='REJECTED' WHERE batch_id=$1 AND status IN ('QUARANTINE','AVAILABLE')").bind(id).execute(&mut *tx).await?;

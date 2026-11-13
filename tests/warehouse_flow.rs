@@ -203,19 +203,35 @@ async fn reservation_rule_for_fg_ready(pool: PgPool) {
     // 100 - 10 = 90 >= 80 reserved: fine
     let (s, _) = c.post("/api/warehouse/adjustments", adj(-10)).await;
     assert_eq!(s, 201);
-    // 90 - 30 = 60 < 80: needs confirm and says why
+    // 90 - 30 = 60 < 80: HARD block naming the trips (confirm and Admin do not override)
     let (s, e) = c.post("/api/warehouse/adjustments", adj(-30)).await;
-    assert_eq!((s, code(&e)), (409, "CONFIRM_REQUIRED"), "{e}");
-    assert!(e["error"]["details"]["warnings"][0].as_str().unwrap().contains("reserved"));
+    assert_eq!((s, code(&e)), (409, "RESERVED_STOCK"), "{e}");
+    assert!(e["error"]["message"].as_str().unwrap().contains("reserved by open loading trips"));
+    assert_eq!(e["error"]["details"]["trips"][0]["crates"], 80);
+    assert!(e["error"]["details"]["trips"][0]["trip_no"].as_str().unwrap().starts_with('T'));
     // scrap transfer and write-off respect it too
     let (s, e) = c.post("/api/warehouse/transfers", json!({ "item_type": "PRODUCT", "item_id": p.p500, "lot_id": b, "from_zone": "FG_READY", "to_zone": "SCRAP_YARD", "qty": 30, "note": "water damage" })).await;
-    assert_eq!((s, code(&e)), (409, "CONFIRM_REQUIRED"), "{e}");
-    let (s, e) = c.post("/api/warehouse/write-offs", json!({ "item_type": "PRODUCT", "item_id": p.p500, "zone": "FG_READY", "lot_id": b, "qty": 30, "reason_code": "BREAKAGE", "note": "water damage" })).await;
-    assert_eq!(code(&e), "CONFIRM_REQUIRED", "{e}");
-    assert!(e["error"]["details"]["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("reserved")));
+    assert_eq!((s, code(&e)), (409, "RESERVED_STOCK"), "{e}");
+    let (s, e) = c.post("/api/warehouse/write-offs", json!({ "item_type": "PRODUCT", "item_id": p.p500, "zone": "FG_READY", "lot_id": b, "qty": 30, "reason_code": "BREAKAGE", "note": "water damage", "confirm": true })).await;
+    assert_eq!((s, code(&e)), (409, "RESERVED_STOCK"), "{e}");
     let mut ok = adj(-30);
     ok["confirm"] = json!(true);
-    let (s, _) = c.post("/api/warehouse/adjustments", ok).await;
+    let (s, e) = c.post("/api/warehouse/adjustments", ok).await;
+    assert_eq!((s, code(&e)), (409, "RESERVED_STOCK"), "confirm must not override: {e}");
+    // a count that would cut below the reservation is refused too, naming the trip
+    let (_, cnt) = c.post("/api/warehouse/counts", json!({ "zone": "FG_READY" })).await;
+    let cid = cnt["id"].as_str().unwrap().to_string();
+    let lid = cnt["lines"][0]["line_id"].clone();
+    let (s, _) = c.put(&format!("/api/warehouse/counts/{cid}/lines"), json!({ "lines": [{ "line_id": lid, "counted_qty": 50, "note": "pallet missing" }] })).await;
+    assert_eq!(s, 200);
+    let (s, e) = c.post(&format!("/api/warehouse/counts/{cid}/post"), json!({ "confirm": true })).await;
+    assert_eq!((s, code(&e)), (409, "RESERVED_STOCK"), "{e}");
+    let (s, _) = c.put(&format!("/api/warehouse/counts/{cid}/lines"), json!({ "lines": [{ "line_id": lid, "counted_qty": 85, "note": "small variance" }] })).await;
+    assert_eq!(s, 200);
+    let (s, e) = c.post(&format!("/api/warehouse/counts/{cid}/post"), json!({ "confirm": true })).await;
+    assert_eq!(s, 200, "{e}");
+    // 5 crates may still go (85 - 5 = 80 = reserved)
+    let (s, _) = c.post("/api/warehouse/adjustments", adj(-5)).await;
     assert_eq!(s, 201);
     // positive adjustments need an APPROVED batch lot
     let quarantined: Uuid = sqlx::query_scalar("INSERT INTO production_batches (batch_no, product_id, crates, expiry_date) VALUES ('QQ1', $1, 5, current_date + 100) RETURNING id").bind(p.p500).fetch_one(&pool).await.unwrap();
@@ -252,7 +268,7 @@ async fn reservation_race_write_off_vs_loader_never_both_win(pool: PgPool) {
         let (s, v) = adj.await.unwrap();
         let loaded = loader.await.unwrap();
         let adjusted = s == 201;
-        assert!(adjusted || code(&v) == "CONFIRM_REQUIRED", "{s} {v}");
+        assert!(adjusted || code(&v) == "RESERVED_STOCK", "{s} {v}");
         if adjusted && loaded { both += 1; }
         let fg = lot_qty(&pool, "PRODUCT", p.p500, "FG_READY", b).await;
         let reserved: Decimal = stock::fg_reserved(&mut pool.acquire().await.unwrap(), b).await.unwrap();
@@ -280,8 +296,9 @@ async fn write_off_vs_real_loading_endpoint(pool: PgPool) {
     let (s, v) = c.post(&format!("/api/loading/trips/{trip}/items"), json!({ "batch_id": b2, "crates": 8 })).await;
     assert_eq!(s, 201, "{v}");
     let (s, e) = c.post("/api/warehouse/write-offs", wo(b2, 5, false)).await;
-    assert_eq!((s, code(&e)), (409, "CONFIRM_REQUIRED"), "{e}");
-    assert!(e["error"]["details"]["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("reserved")), "{e}");
+    assert_eq!((s, code(&e)), (409, "RESERVED_STOCK"), "{e}");
+    let (s, e) = c.post("/api/warehouse/write-offs", wo(b2, 5, true)).await;
+    assert_eq!((s, code(&e)), (409, "RESERVED_STOCK"), "confirm must not override: {e}");
     // concurrent: a non-confirmed adjustment vs the real loader never both win
     sqlx::query("UPDATE system_settings SET value='1000' WHERE key='entry.large_adjust_pct'").execute(&pool).await.unwrap();
     c.st.settings.reload(&pool).await.unwrap();
@@ -295,7 +312,7 @@ async fn write_off_vs_real_loading_endpoint(pool: PgPool) {
         let load = tokio::spawn(async move { call(&a2, "POST", &format!("/api/loading/trips/{trip}/items"), Some(&k2), Some(json!({ "batch_id": b, "crates": 60 }))).await });
         let (s1, v1) = adj.await.unwrap();
         let (s2, v2) = load.await.unwrap();
-        assert!(s1 == 201 || code(&v1) == "CONFIRM_REQUIRED", "{s1} {v1}");
+        assert!(s1 == 201 || code(&v1) == "RESERVED_STOCK", "{s1} {v1}");
         assert!(s2 == 201 || code(&v2) == "INSUFFICIENT_STOCK", "{s2} {v2}");
         if s1 == 201 && s2 == 201 { both += 1; }
         let fg = lot_qty(&pool, "PRODUCT", p.p500, "FG_READY", b).await;

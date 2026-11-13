@@ -152,12 +152,10 @@ pub async fn adjust(State(s): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>, J
     let reserved = lock_reserved(&mut tx, loc, &ctx, zone, lot).await?;
     let cur = balance_locked(&mut tx, loc, &ctx, zone, lot).await?;
     if cur + delta < Decimal::ZERO { return Err(insufficient(&ctx, zone, lot, cur, -delta)); }
+    if delta < Decimal::ZERO && reserved > Decimal::ZERO && cur + delta < reserved { return Err(bh::reserved_error(&mut tx, loc, lot, reserved).await); }
     let mut warnings = vec![];
     if is_large(cur, delta.abs(), pct) {
         warnings.push(format!("{} {} is a large change for a balance of {} (limit {pct}% or 1000 units)", if delta > Decimal::ZERO { "+" } else { "" }, delta.normalize(), cur.normalize()));
-    }
-    if delta < Decimal::ZERO && reserved > Decimal::ZERO && cur + delta < reserved {
-        warnings.push(format!("{} crates are reserved by open loading trips; their gate pass will fail", reserved.normalize()));
     }
     bh::need_confirm(&warnings, b.confirm, dry, "This adjustment looks unusual")?;
     let id = Uuid::new_v4();
@@ -208,9 +206,9 @@ pub async fn transfer(State(s): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>,
     let reserved = lock_reserved(&mut tx, loc, &ctx, from, lot).await?;
     let cur = balance_locked(&mut tx, loc, &ctx, from, lot).await?;
     if cur < qty { return Err(insufficient(&ctx, from, lot, cur, qty)); }
+    if reserved > Decimal::ZERO && cur - qty < reserved { return Err(bh::reserved_error(&mut tx, loc, lot, reserved).await); }
     let mut warnings = vec![];
     if is_large(cur, qty, pct) { warnings.push(format!("Moving {} of {} is a large share of the balance {} (limit {pct}% or 1000 units)", qty.normalize(), ctx.name, cur.normalize())); }
-    if reserved > Decimal::ZERO && cur - qty < reserved { warnings.push(format!("{} crates are reserved by open loading trips; their gate pass will fail", reserved.normalize())); }
     bh::need_confirm(&warnings, b.confirm, dry, "This transfer looks unusual")?;
     let id = Uuid::new_v4();
     stock::transfer_between(&mut tx, ctx.kind.it(), ctx.id, lot, loc, from, loc, to, qty, "TRANSFER", Some("TRANSFER"), Some(id), Some(user.id), &note).await?;
@@ -267,9 +265,9 @@ pub async fn wo_create(State(s): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>
     let reserved = lock_reserved(&mut tx, loc, &ctx, zone, lot).await?;
     let cur = balance_locked(&mut tx, loc, &ctx, zone, lot).await?;
     if cur < qty { return Err(insufficient(&ctx, zone, lot, cur, qty)); }
-    let mut warnings = vec![format!("{} {} of {} will be {} ({}). This cannot be undone.", qty.normalize(), if ctx.kind == ItemKind::Product { "crates" } else { "units" }, ctx.name,
+    if reserved > Decimal::ZERO && cur - qty < reserved { return Err(bh::reserved_error(&mut tx, loc, lot, reserved).await); }
+    let warnings = vec![format!("{} {} of {} will be {} ({}). This cannot be undone.", qty.normalize(), if ctx.kind == ItemKind::Product { "crates" } else { "units" }, ctx.name,
         if dispose { "written off and removed from the books" } else { "written off to the scrap yard" }, b.reason_code)];
-    if reserved > Decimal::ZERO && cur - qty < reserved { warnings.push(format!("{} crates are reserved by open loading trips; their gate pass will fail", reserved.normalize())); }
     bh::need_confirm(&warnings, b.confirm, dry, "Write-offs are irreversible - please confirm")?;
     let id = Uuid::new_v4();
     let wo_no = bh::doc_no(&mut tx, "wo_seq", "WO", dry).await?;
@@ -483,9 +481,7 @@ pub async fn count_post(State(s): State<AppState>, user: AuthUser, Id(id): Id, Q
             let st: Option<String> = sqlx::query_scalar("SELECT qc_status FROM production_batches WHERE id=$1 AND product_id=$2").bind(lot).bind(item).fetch_optional(&mut *tx).await?;
             if st.as_deref() != Some("APPROVED") { return Err(AppError::conflict("QC_LOCKED", format!("{name}: only QC-approved batches can be added to finished goods"))); }
         }
-        if reserved > Decimal::ZERO && counted < reserved {
-            warnings.push(format!("{name}: counted {} but {} crates are reserved by open loading trips", counted.normalize(), reserved.normalize()));
-        }
+        if reserved > Decimal::ZERO && counted < reserved { return Err(bh::reserved_error(&mut tx, loc, lot, reserved).await); }
         if warnings.len() < 12 { warnings.push(format!("{name}: {} -> {} ({}{})", cur.normalize(), counted.normalize(), if delta > Decimal::ZERO { "+" } else { "" }, delta.normalize())); }
         let kind_it: ItemType = kind.it();
         moves.push(Move::new(kind_it, item, zone, lot, delta, "ADJUST").at(loc).reference("COUNT", id).by(Some(user.id)).note(format!("stock count {cnt_no}")));

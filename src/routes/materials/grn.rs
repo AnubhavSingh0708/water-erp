@@ -331,6 +331,20 @@ pub async fn rtv_create(State(s): State<AppState>, user: AuthUser, Q(dq): Q<DryQ
                 r.get::<Decimal, _>("qty_stock").normalize(), returned.normalize())));
         }
     }
+    // a return tied to a GRN of a purchase order reopens that PO line (purchase units, never below 0)
+    if let Some(g) = b.grn_id {
+        let po: Option<Uuid> = sqlx::query_scalar("SELECT po_id FROM grns WHERE id=$1").bind(g).fetch_one(&mut *tx).await?;
+        if let Some(po) = po {
+            sqlx::query("SELECT id FROM purchase_orders WHERE id=$1 FOR UPDATE").bind(po).execute(&mut *tx).await?;
+            sqlx::query("SELECT id FROM po_lines WHERE po_id=$1 ORDER BY id FOR UPDATE").bind(po).execute(&mut *tx).await?;
+            for l in &b.lines {
+                sqlx::query("UPDATE po_lines p SET qty_received = GREATEST(p.qty_received - ($2 / m.stock_per_purchase_unit), 0)
+                             FROM grn_lines gl JOIN raw_materials m ON m.id = gl.raw_material_id WHERE gl.id = $1 AND p.id = gl.po_line_id")
+                    .bind(l.lot_id).bind(l.qty_stock.0).execute(&mut *tx).await?;
+            }
+            recompute_po_status(&mut tx, po).await?;
+        }
+    }
     let id = Uuid::new_v4();
     let rtv_no = bh::doc_no(&mut tx, "rtv_seq", "RTV", dry).await?;
     sqlx::query("INSERT INTO supplier_returns (id, rtv_no, supplier_id, grn_id, note, created_by, location_id) VALUES ($1,$2,$3,$4,$5,$6,$7)")

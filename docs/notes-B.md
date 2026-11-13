@@ -27,7 +27,7 @@ Branch: `worktree-agent-a9ddff392f4b1e8cf`. No migration (0012) and no new crate
 5. **Blow runs**: no `confirm`; scrap % above `production.scrap_warn_pct` requires non-empty `notes` (422 on `notes`), and a `warnings` entry is returned. Whole numbers only for issued/good.
 6. **Water logs**: out of range = pH or TDS outside the `lab.*` limits; `uv_ok:false` only adds a soft warning. `GET /water-logs/status` also returns `last_out_of_range`.
 7. **QC**: batch row `FOR UPDATE` → QR sets (`FOR UPDATE`) → stock (loading's lock order). `tested_at` uses `clock_timestamp()` so "latest test" is well defined. Approve/reject release the *remaining* lot balance; QR sets flipped by plain SQL.
-   QC reject of a RETURNABLE batch does not write a fleet DESTROYED event (containers are not necessarily destroyed).
+   QC reject of a RETURNABLE batch writes one `jar_fleet_events` DESTROYED row (OTHER / PLANT_CLEAN, note `QC reject <batch_no>`, location_id = the batch's site).
 8. **Warehouse corrections** (all inside one tx, batch row of an FG_READY lot locked `FOR UPDATE` BEFORE `fg_reserved` is read):
    * adjustments accept optional `reason_code ∈ COUNT_CORRECTION, ENTRY_ERROR, FOUND, DAMAGE, OTHER` (stored as `[CODE] reason` in the ledger note);
      RAW zones: RM_STORE/BLOW_FLOOR/SCRAP_YARD; PRODUCT: FG_READY/SCRAP_YARD (+ JAR_EMPTY/JAR_CLEAN for RETURNABLE, nil lot). QC_QUARANTINE → 400. FG_READY needs a batch lot of that product; adding needs an APPROVED batch (`QC_LOCKED`).
@@ -37,7 +37,7 @@ Branch: `worktree-agent-a9ddff392f4b1e8cf`. No migration (0012) and no new crate
    * write-offs/transfers of RETURNABLE containers to scrap write a `jar_fleet_events` DESTROYED row (reason mapped from the write-off code; location PLANT_EMPTY for JAR_EMPTY else PLANT_CLEAN).
    * counts: one snapshot per zone (QC_QUARANTINE refused); post recomputes `delta = counted − current balance` under row locks; lines with a variance above `large_adjust_pct` need a line note (422 otherwise); positive variance on FG_READY needs an APPROVED batch.
 9. **GRN**: unknown/invented ids → 422 field errors; expiry date in the past → 422; PO of another supplier / material not on the PO / `po_line_id` of another PO → 422. GRN void is allowed only while each lot still has its full received quantity in RM_STORE.
-   Supplier returns are capped at (received − already returned) per lot and do not change PO `qty_received`.
+   Supplier returns are capped at (received − already returned) per lot; a return tied to a GRN (`grn_id`) of a PO lowers that PO line's `qty_received` (qty_stock / stock_per_purchase_unit, never below 0) and recomputes the PO status.
 10. **Dashboard** honours `alerts::user_may_receive`: `recent_alerts` only contains event types the caller may see; KPI numbers for pages the caller cannot open are `null` and the matching lists are empty.
 11. Lists documented as "bare array" (`/api/raw-materials`, `/stock`, POs, recommendations, ref data) are bounded to 500 rows; `?format=csv` bypasses the cap up to 50 000 rows.
 12. Extractor rejections (bad JSON, unknown field, bad query, bad id) always use the error envelope (`400 BAD_REQUEST` / `404`).
@@ -62,13 +62,11 @@ Branch: `worktree-agent-a9ddff392f4b1e8cf`. No migration (0012) and no new crate
 * None blocking. Optional: a `batch_material_usage.kind` column would make waste rows self-describing (waste is currently derived from the ledger `BATCH_WASTE` rows).
 * Test env tip: set `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0` – debug-info test binaries filled the 250 GB disk once and took the Postgres clusters down.
 
-## Contract question for the Lead
-Write-offs and count posts always need `confirm:true`, and that single flag also covers the "N crates are reserved by open loading trips" warning.
-In the normal flow (dry run -> user confirms -> real submit) a loader could reserve crates between the dry run and the submit, and the submit then succeeds
-without the user having seen the reservation warning (the trip's gate pass later fails with `INSUFFICIENT_STOCK`, which is visible). Options: a separate acknowledgement
-flag (e.g. `ack_reserved`) or a hard block for write-offs of reserved crates. Not changed – needs a contract decision.
+## Reserved stock (hard block)
+Write-offs, scrap transfers, negative adjustments, count posts and godown transfers that would take a PRODUCT lot in FG_READY below the crates reserved by open LOADING trips of that godown
+answer `409 RESERVED_STOCK` (message "N crates are reserved by open loading trips (T1, T2) - remove them from the trip first"; `details.trips[]` = trip numbers + crates). Not overridable by `confirm` or Admin.
+The batch row is locked `FOR UPDATE` first, so the check is serialised with loaders. Suggested `hint_for("RESERVED_STOCK")`: "Open the loading trip(s) named in the message, remove those crates, then repeat this action."
 
 ## Known gaps
 * No inline reorder evaluation on batch/blow consumption beyond a best-effort spawned task after commit (the worker is authoritative).
-* Supplier returns do not reduce PO `qty_received` (a replacement delivery counts against the 110 % limit).
 * Pallet convenience fields are present on batch/stock responses; there is no pallet input conversion server-side (UI concern).

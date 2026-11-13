@@ -146,8 +146,9 @@ pub async fn create(State(s): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>, J
         if let Some(p) = l.batch_product {
             let free = stock::fg_free_at(&mut tx, from, p, l.lot).await?;
             if l.qty > free {
-                return Err(AppError::conflict_with("INSUFFICIENT_STOCK",
-                    format!("{}: only {} crates are free to transfer (the rest is reserved by open loading trips)", l.name, free.max(Decimal::ZERO).normalize()),
+                let reserved = stock::fg_reserved_at(&mut tx, from, l.lot).await?;
+                if reserved > Decimal::ZERO && l.qty <= free + reserved { return Err(bh::reserved_error(&mut tx, from, l.lot, reserved).await); }
+                return Err(AppError::conflict_with("INSUFFICIENT_STOCK", format!("{}: only {} crates are available to transfer", l.name, free.max(Decimal::ZERO).normalize()),
                     json!({ "item_type": "PRODUCT", "item_id": l.item, "lot_id": l.lot, "location_id": from, "available": free.max(Decimal::ZERO), "required": l.qty })));
             }
         }
