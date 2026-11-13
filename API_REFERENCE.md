@@ -193,6 +193,18 @@ QR payload = URL `{base}/loading.html?qr={code}` (`base` from `AppState::base_ur
 * **Dispatcher** (worker every 5 s): picks alerts with `dispatched_at IS NULL`, finds active users whose `subscribed_notifications ? event_type`, sends VAPID Web Push (`web-push-native` + `reqwest`) payload `{title,body,url,tag,alert_id}` to each active subscription of those users **only**, records `push_deliveries` (no duplicate per alert/user), deactivates subscriptions on 404/410, marks `dispatched_at`. Without VAPID keys: marks dispatched and logs once.
 * CLI: `water-erp gen-vapid` prints `VAPID_PRIVATE_KEY=` / `VAPID_PUBLIC_KEY=`.
 
+## 13b. Extra ERP features (added by Lead)
+
+**Owner B** (all inside B's own route files):
+* `GET /api/warehouse/expiring?days=60` → lots (RAW and PRODUCT, qty > 0, zones other than SCRAP_YARD) expiring within N days or already expired, with `days_left`. The reorder worker file (`workers/reorder.rs`) ALSO runs this check each loop and raises `STOCK_EXPIRY` alerts (key `lot:<lot_id>:<zone>`, resolved when qty reaches 0) using `alerts.expiry_lead_days`.
+* `GET /api/production/batches/{id}/trace` → traceability / recall view: batch, materials used (+ GRN lot numbers & suppliers via `lot_id`), QC tests, QR sets with their trips (trip_no, vehicle, gate pass, status), totals loaded / delivered / returned / damaged / still in stock.
+* `GET /api/production/summary?from=&to=` → `{days:[{date,batches,crates,bottles,blow_good,blow_scrap,scrap_pct}], by_product:[…], material_usage:[{raw_material_id,name,qty}]}`.
+* **CSV export**: `?format=csv` on `GET /api/warehouse/stock`, `/api/warehouse/ledger`, `/api/production/batches`, `/api/production/blow-runs`, `/api/raw-materials` returns `text/csv; charset=utf-8` with `Content-Disposition: attachment` (header row, max 50 000 rows). **CSV-injection defence**: any cell starting with `= + - @ \t \r` is prefixed with `'`. The frontend downloads via authenticated `fetch` → Blob.
+**Owner C**: `GET /api/loading/trips/{id}/gate-pass` and `/api/qr/batches/{id}/sheet` are the print sources. `GET /api/loading/summary` → `{open_trips, on_road, settled_today, crates_dispatched_today}`.
+
+## 13c. Start-up modes (Lead, `src/config.rs`)
+`--mode local|domain` (required unless `--localhost`). `--localhost` (testing): forces bind to `127.0.0.1`, mode `local`, plain HTTP unless `--tls-cert/--tls-key` are given (browsers treat `http://localhost` as a secure context, so the Secure cookie, camera and service worker still work). Not allowed with `--mode domain`. QR URLs then use the request Host (`http://localhost:<port>`).
+
 ---------------------------------------------------------------------------------------------------------------------
 ## 14. Frontend contract (Owners D, E – later phase)
 

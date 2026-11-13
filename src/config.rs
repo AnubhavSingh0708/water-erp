@@ -39,6 +39,10 @@ pub struct Cli {
     /// Create the first Admin with this username if no Admin exists. Password is read from env ERP_ADMIN_PASSWORD (never a flag).
     #[arg(long)]
     pub setup_admin: Option<String>,
+    /// Localhost-only testing: bind 127.0.0.1 only, default mode `local`, plain HTTP (browsers treat http://localhost as a
+    /// secure context, so cookies/camera/service-worker work) unless --tls-cert/--tls-key are given. Not allowed with --mode domain.
+    #[arg(long, env = "ERP_LOCALHOST")]
+    pub localhost: bool,
     /// Serve plain HTTP (local mode only; for development/tests behind a trusted proxy).
     #[arg(long, hide = true)]
     pub insecure_http: bool,
@@ -73,7 +77,12 @@ pub struct Config {
 
 impl Config {
     pub fn from_cli(cli: &Cli) -> anyhow::Result<Config> {
-        let mode = cli.mode.ok_or_else(|| anyhow::anyhow!("--mode <local|domain> is required"))?;
+        if cli.localhost && cli.mode == Some(Mode::Domain) { anyhow::bail!("--localhost cannot be combined with --mode domain"); }
+        let mode = match (cli.mode, cli.localhost) {
+            (Some(m), _) => m,
+            (None, true) => Mode::Local,
+            (None, false) => anyhow::bail!("--mode <local|domain> is required (or use --localhost for local testing)"),
+        };
         let database_url = cli.database_url.clone().ok_or_else(|| anyhow::anyhow!("--database-url (or DATABASE_URL) is required"))?;
         if mode == Mode::Domain {
             if cli.domain.is_none() { anyhow::bail!("--domain is required in domain mode"); }
@@ -81,14 +90,22 @@ impl Config {
             if cli.insecure_http { anyhow::bail!("--insecure-http is not allowed in domain mode"); }
         }
         if cli.tls_cert.is_some() != cli.tls_key.is_some() { anyhow::bail!("--tls-cert and --tls-key must be given together"); }
-        let host = cli.domain.clone().unwrap_or_else(|| "localhost".into());
+        let mut bind = cli.bind;
+        let mut domain = cli.domain.clone();
+        let mut insecure_http = cli.insecure_http;
+        if cli.localhost {
+            bind.set_ip(std::net::Ipv4Addr::LOCALHOST.into());
+            domain = None;
+            if cli.tls_cert.is_none() { insecure_http = true; }
+        }
+        let host = domain.clone().unwrap_or_else(|| "localhost".into());
         let vapid_subject = cli.vapid_subject.clone().unwrap_or_else(|| format!("https://{host}"));
         Ok(Config {
-            mode, domain: cli.domain.clone(), bind: cli.bind, database_url,
+            mode, domain, bind, database_url,
             tls_cert: cli.tls_cert.clone(), tls_key: cli.tls_key.clone(),
             static_dir: cli.static_dir.clone(), data_dir: cli.data_dir.clone(),
             vapid_private_key: cli.vapid_private_key.clone(), vapid_public_key: cli.vapid_public_key.clone(),
-            vapid_subject, setup_admin: cli.setup_admin.clone(), insecure_http: cli.insecure_http,
+            vapid_subject, setup_admin: cli.setup_admin.clone(), insecure_http,
         })
     }
 }

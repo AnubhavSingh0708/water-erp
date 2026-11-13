@@ -16,6 +16,7 @@ pub const EVENT_TYPES: &[(&str, &str)] = &[
     ("JAR_OVERDUE", "20L jars overdue at customer"),
     ("MAINTENANCE_DUE", "Equipment maintenance due/overdue"),
     ("VEHICLE_DOC_EXPIRY", "Vehicle insurance/fitness/PUC/permit expiring"),
+    ("STOCK_EXPIRY", "Raw material lot or finished-goods batch nearing expiry"),
 ];
 
 pub fn is_valid_event(code: &str) -> bool { EVENT_TYPES.iter().any(|(c, _)| *c == code) }
