@@ -175,7 +175,7 @@ pub fn build_router(state: AppState) -> Router {
         .layer(sec("referrer-policy", "same-origin"))
         .layer(sec("permissions-policy", "camera=(self), geolocation=()"))
         .layer(sec("content-security-policy",
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'"))
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"))
         .layer(sec("cross-origin-opener-policy", "same-origin"))
         .layer(hsts)
         .layer(CompressionLayer::new())
