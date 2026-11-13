@@ -62,7 +62,7 @@ pub async fn idempotency(State(s): State<AppState>, req: Request, next: Next) ->
     if !matches!(*req.method(), Method::POST | Method::PUT | Method::PATCH | Method::DELETE) { return Ok(next.run(req).await); }
     let Some(key) = req.headers().get("idempotency-key").and_then(|v| v.to_str().ok()).map(str::to_owned) else { return Ok(next.run(req).await) };
     // dry runs never touch the key (a dry run followed by the real submit must run the handler)
-    if req.uri().query().map_or(false, |q| q.split('&').any(|p| p == "dry_run" || p.starts_with("dry_run="))) { return Ok(next.run(req).await); }
+    if crate::util::dry_run_in_query(req.uri().query()) { return Ok(next.run(req).await); }
     if key.len() < 8 || key.len() > 64 || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         return Err(AppError::field("Idempotency-Key", "must be 8-64 characters (letters, digits, - _)"));
     }
@@ -105,10 +105,18 @@ pub async fn idempotency(State(s): State<AppState>, req: Request, next: Next) ->
     }
     let resp = next.run(req).await;
     let (parts, body) = resp.into_parts();
-    let bytes = axum::body::to_bytes(body, 512 * 1024).await.map_err(|e| AppError::Internal(anyhow::anyhow!("idempotency body: {e}")))?;
+    // The handler has already COMMITTED when we get here: a response that is merely large must never turn into a 500 (the client would
+    // retry and, once the 35 s "stale key" window passes, the write would run a second time).
+    let bytes = axum::body::to_bytes(body, 64 * 1024 * 1024).await.map_err(|e| AppError::Internal(anyhow::anyhow!("idempotency body: {e}")))?;
     if parts.status.is_success() {
+        // Responses over 512 KB are returned to the caller but stored as a small marker: a retry gets "already processed" instead of a re-run.
+        const MAX_STORED: usize = 512 * 1024;
+        let marker = br#"{"idempotent_replay_truncated":true,"message":"This request was already processed. Its response was too large to store - reload the page to see the result."}"#;
+        let stored: &[u8] = if bytes.len() <= MAX_STORED { bytes.as_ref() } else { marker };
         sqlx::query("UPDATE idempotency_keys SET status=$3, body=$4 WHERE user_id=$1 AND key=$2")
-            .bind(user).bind(&key).bind(parts.status.as_u16() as i32).bind(bytes.as_ref()).execute(&s.db).await?;
+            .bind(user).bind(&key).bind(parts.status.as_u16() as i32).bind(stored).execute(&s.db).await
+            // the write is committed: report it even if remembering the response failed (the key then simply frees up after 35 s)
+            .map_err(|e| tracing::warn!(error = %e, "could not store idempotent response")).ok();
     } else {
         // only successes are replayed: validation errors, CONFIRM_REQUIRED, 5xx ... must be re-runnable with the same key
         let _ = sqlx::query("DELETE FROM idempotency_keys WHERE user_id=$1 AND key=$2").bind(user).bind(&key).execute(&s.db).await;

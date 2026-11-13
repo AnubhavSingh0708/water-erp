@@ -59,7 +59,7 @@ impl<S: Send + Sync> FromRequestParts<S> for Ids {
 #[derive(Deserialize, Default)]
 pub struct DryQ { #[serde(default)] pub dry_run: Option<String> }
 impl DryQ {
-    pub fn on(&self) -> bool { !matches!(self.dry_run.as_deref(), None | Some("0") | Some("false")) }
+    pub fn on(&self) -> bool { crate::util::dry_value(self.dry_run.as_deref()) }
 }
 
 /// Whole number that may arrive as a JSON number or a numeric string.

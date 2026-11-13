@@ -70,12 +70,7 @@ where
 
 /// `?dry_run=1` / `?dry_run=true` / bare `?dry_run`.
 pub fn is_dry_run(uri: &axum::http::Uri) -> bool {
-    uri.query().map_or(false, |q| {
-        q.split('&').any(|p| {
-            let (k, v) = p.split_once('=').unwrap_or((p, ""));
-            k == "dry_run" && !matches!(v, "0" | "false" | "no")
-        })
-    })
+    crate::util::dry_run_in_query(uri.query())
 }
 
 /// Optional UUID query parameter: empty -> None, malformed -> 422.
