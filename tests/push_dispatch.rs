@@ -44,12 +44,12 @@ async fn alert(pool: &PgPool, ev: &str, key: &str) -> Uuid {
 #[sqlx::test(migrations = "./migrations")]
 async fn delivers_only_to_subscribed_active_users_with_active_subscriptions(pool: PgPool) {
     let st = common::state(pool.clone()).await;
-    let a = common::make_user(&pool, "alice", false, &[], &["QC_PENDING"]).await;
-    let b = common::make_user(&pool, "bob", false, &[], &["MAINTENANCE_DUE"]).await;           // other type
-    let c = common::make_user(&pool, "carol", false, &[], &["QC_PENDING"]).await;              // deactivated user
-    let d = common::make_user(&pool, "dave", false, &[], &["QC_PENDING"]).await;               // no subscription at all
-    let e = common::make_user(&pool, "erin", false, &[], &["QC_PENDING"]).await;               // only an inactive subscription
-    let f = common::make_user(&pool, "frank", false, &[], &[]).await;                          // nothing subscribed
+    let a = common::make_user(&pool, "alice", false, &["qc"], &["QC_PENDING"]).await;
+    let b = common::make_user(&pool, "bob", false, &["maintenance"], &["MAINTENANCE_DUE"]).await;           // other type
+    let c = common::make_user(&pool, "carol", false, &["qc"], &["QC_PENDING"]).await;              // deactivated user
+    let d = common::make_user(&pool, "dave", false, &["qc"], &["QC_PENDING"]).await;               // no subscription at all
+    let e = common::make_user(&pool, "erin", false, &["qc"], &["QC_PENDING"]).await;               // only an inactive subscription
+    let f = common::make_user(&pool, "frank", false, &["qc"], &[]).await;                          // nothing subscribed
     sqlx::query("UPDATE users SET is_active=false WHERE id=$1").bind(c).execute(&pool).await.unwrap();
     let ea = sub(&pool, a, "a", true).await;
     let _ = sub(&pool, a, "a2", true).await;
@@ -87,7 +87,7 @@ async fn delivers_only_to_subscribed_active_users_with_active_subscriptions(pool
 #[sqlx::test(migrations = "./migrations")]
 async fn existing_delivery_row_prevents_duplicate_and_notify_once_is_dispatched(pool: PgPool) {
     let st = common::state(pool.clone()).await;
-    let a = common::make_user(&pool, "alice", false, &[], &["QC_APPROVED", "QC_PENDING"]).await;
+    let a = common::make_user(&pool, "alice", false, &["qc"], &["QC_APPROVED", "QC_PENDING"]).await;
     sub(&pool, a, "a", true).await;
     let id = alert(&pool, "QC_PENDING", "k").await;
     sqlx::query("INSERT INTO push_deliveries (alert_id,user_id) VALUES ($1,$2)").bind(id).bind(a).execute(&pool).await.unwrap();
@@ -104,7 +104,7 @@ async fn existing_delivery_row_prevents_duplicate_and_notify_once_is_dispatched(
 #[sqlx::test(migrations = "./migrations")]
 async fn gone_endpoint_is_deactivated_failures_are_recorded(pool: PgPool) {
     let st = common::state(pool.clone()).await;
-    let a = common::make_user(&pool, "alice", false, &[], &["LOW_STOCK"]).await;
+    let a = common::make_user(&pool, "alice", false, &["warehouse"], &["LOW_STOCK"]).await;
     let ok = sub(&pool, a, "ok", true).await;
     let stale = sub(&pool, a, "stale", true).await;
     let flaky = sub(&pool, a, "flaky", true).await;
@@ -131,7 +131,7 @@ async fn gone_endpoint_is_deactivated_failures_are_recorded(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 async fn without_vapid_keys_alerts_are_only_marked_dispatched(pool: PgPool) {
     let st = common::state(pool.clone()).await; // test config has no VAPID keys
-    let a = common::make_user(&pool, "alice", false, &[], &["LOW_STOCK"]).await;
+    let a = common::make_user(&pool, "alice", false, &["warehouse"], &["LOW_STOCK"]).await;
     sub(&pool, a, "a", true).await;
     let id = alert(&pool, "LOW_STOCK", "m1").await;
     let s = dispatch_once(&st).await.unwrap();
@@ -145,7 +145,7 @@ async fn without_vapid_keys_alerts_are_only_marked_dispatched(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 async fn stale_alerts_are_not_pushed(pool: PgPool) {
     let st = common::state(pool.clone()).await;
-    let a = common::make_user(&pool, "alice", false, &[], &["LOW_STOCK"]).await;
+    let a = common::make_user(&pool, "alice", false, &["warehouse"], &["LOW_STOCK"]).await;
     sub(&pool, a, "a", true).await;
     let id = alert(&pool, "LOW_STOCK", "old").await;
     sqlx::query("UPDATE alerts SET created_at = now() - interval '2 days' WHERE id=$1").bind(id).execute(&pool).await.unwrap();
@@ -160,7 +160,7 @@ async fn stale_alerts_are_not_pushed(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 async fn concurrent_dispatchers_never_double_send(pool: PgPool) {
     let st = common::state(pool.clone()).await;
-    let a = common::make_user(&pool, "alice", false, &[], &["LOW_STOCK"]).await;
+    let a = common::make_user(&pool, "alice", false, &["warehouse"], &["LOW_STOCK"]).await;
     sub(&pool, a, "a", true).await;
     for i in 0..10 { alert(&pool, "LOW_STOCK", &format!("m{i}")).await; }
     let mock = Mock::default();
@@ -169,4 +169,21 @@ async fn concurrent_dispatchers_never_double_send(pool: PgPool) {
     assert_eq!(mock.count(), 10, "each alert reaches alice's single device exactly once");
     let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM push_deliveries").fetch_one(&pool).await.unwrap();
     assert_eq!(n, 10);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn push_requires_permission_for_the_event_type(pool: PgPool) {
+    let st = common::state(pool.clone()).await;
+    let nopage = common::make_user(&pool, "nopage", false, &["warehouse"], &["JAR_OVERDUE"]).await;
+    let jars = common::make_user(&pool, "jarsuser", false, &["jars"], &["JAR_OVERDUE"]).await;
+    let admin = common::make_user(&pool, "boss", true, &[], &["JAR_OVERDUE"]).await;
+    for (u, n) in [(nopage, "n"), (jars, "j"), (admin, "a")] { sub(&pool, u, n, true).await; }
+    alert(&pool, "JAR_OVERDUE", "c:p").await;
+    let mock = Mock::default();
+    dispatch_with(&st, Some(&mock)).await.unwrap();
+    let mut got = mock.users();
+    got.sort();
+    let mut want = vec![jars, admin];
+    want.sort();
+    assert_eq!(got, want, "the user without the jars page must not be pushed customer data");
 }

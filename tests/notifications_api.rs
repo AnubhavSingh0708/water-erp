@@ -29,14 +29,17 @@ async fn auth_required_but_no_page_needed(pool: PgPool) {
     let k = session_for(&pool, u).await;
     let (s, v) = call(&app, "GET", "/api/notifications/types", Some(&k), None).await;
     assert_eq!(s, StatusCode::OK);
+    assert_eq!(v.as_array().unwrap().len(), 0, "no page => no notification types");
+    let admin = make_user(&pool, "adm", true, &[], &[]).await;
+    let (_, v) = call(&app, "GET", "/api/notifications/types", Some(&session_for(&pool, admin).await), None).await;
     assert!(v.as_array().unwrap().iter().any(|t| t["code"] == "JAR_FLEET_ALERT"));
 }
 
 #[sqlx::test(migrations = "./migrations")]
 async fn subscriptions_are_validated_and_own_only(pool: PgPool) {
     let (app, _) = app(pool.clone()).await;
-    let a = make_user(&pool, "a", false, &[], &[]).await;
-    let b = make_user(&pool, "b", false, &[], &["LOW_STOCK"]).await;
+    let a = make_user(&pool, "a", false, &["qc", "raw-materials"], &[]).await;
+    let b = make_user(&pool, "b", false, &["warehouse"], &["LOW_STOCK"]).await;
     let (ka, kb) = (session_for(&pool, a).await, session_for(&pool, b).await);
     let (s, v) = call(&app, "PUT", "/api/notifications/subscriptions", Some(&ka), Some(json!({"subscribed":["QC_PENDING","QC_PENDING","LOW_STOCK"]}))).await;
     assert_eq!(s, StatusCode::OK);
@@ -52,8 +55,8 @@ async fn subscriptions_are_validated_and_own_only(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 async fn inbox_only_shows_subscribed_types_and_read_probe_is_404(pool: PgPool) {
     let (app, _) = app(pool.clone()).await;
-    let a = make_user(&pool, "a", false, &[], &["LOW_STOCK"]).await;
-    let b = make_user(&pool, "b", false, &[], &["JAR_OVERDUE"]).await;
+    let a = make_user(&pool, "a", false, &["warehouse", "jars"], &["LOW_STOCK"]).await;
+    let b = make_user(&pool, "b", false, &["jars"], &["JAR_OVERDUE"]).await;
     let (ka, kb) = (session_for(&pool, a).await, session_for(&pool, b).await);
     let low = raise(&pool, "LOW_STOCK", "m", "Low cap").await;
     let jar = raise(&pool, "JAR_OVERDUE", "c:p", "Customer X owes jars").await;
@@ -97,7 +100,7 @@ async fn inbox_only_shows_subscribed_types_and_read_probe_is_404(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 async fn sql_injection_strings_in_filters_are_inert(pool: PgPool) {
     let (app, _) = app(pool.clone()).await;
-    let a = make_user(&pool, "a", false, &[], &["LOW_STOCK"]).await;
+    let a = make_user(&pool, "a", false, &["warehouse"], &["LOW_STOCK"]).await;
     let ka = session_for(&pool, a).await;
     raise(&pool, "LOW_STOCK", "m", "t").await;
     for q in ["unread=1'%20OR%20'1'='1", "unread=1;DROP%20TABLE%20alerts;--", "limit=1%3BSELECT%201", "offset=-5"] {
@@ -190,4 +193,41 @@ async fn malformed_ids_use_the_error_envelope(pool: PgPool) {
         assert_eq!(s, StatusCode::BAD_REQUEST, "{p}");
         assert_eq!(v["error"]["code"], "BAD_REQUEST", "{p}: {v}");
     }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn permissions_gate_types_subscriptions_and_inbox(pool: PgPool) {
+    let (app, _) = app(pool.clone()).await;
+    // subscribed to JAR_OVERDUE (stored by an admin earlier) but without the jars page
+    let u = make_user(&pool, "u", false, &["warehouse"], &["JAR_OVERDUE", "LOW_STOCK"]).await;
+    let ku = session_for(&pool, u).await;
+    raise(&pool, "JAR_OVERDUE", "c:p", "Customer X owes jars").await;
+    raise(&pool, "LOW_STOCK", "m", "Low cap").await;
+    let (_, v) = call(&app, "GET", "/api/notifications/types", Some(&ku), None).await;
+    let codes: Vec<&str> = v.as_array().unwrap().iter().map(|t| t["code"].as_str().unwrap()).collect();
+    assert!(codes.contains(&"LOW_STOCK") && !codes.contains(&"JAR_OVERDUE"));
+    let (s, v) = call(&app, "PUT", "/api/notifications/subscriptions", Some(&ku), Some(json!({"subscribed":["JAR_OVERDUE"]}))).await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
+    assert!(v["error"]["fields"]["subscribed"].is_string());
+    let (_, v) = call(&app, "GET", "/api/notifications/subscriptions", Some(&ku), None).await;
+    assert_eq!(v["subscribed"], json!(["LOW_STOCK"]), "ineffective stored subscription is not shown");
+    let (_, v) = call(&app, "GET", "/api/notifications/inbox", Some(&ku), None).await;
+    assert_eq!((v["total"].clone(), v["items"][0]["title"].clone()), (json!(1), json!("Low cap")));
+    let (_, v) = call(&app, "GET", "/api/notifications/inbox/unread-count", Some(&ku), None).await;
+    assert_eq!(v["count"], 1);
+    let jar: Uuid = sqlx::query_scalar("SELECT id FROM alerts WHERE event_type='JAR_OVERDUE'").fetch_one(&pool).await.unwrap();
+    let (s, _) = call(&app, "POST", &format!("/api/notifications/inbox/{jar}/read"), Some(&ku), None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    // granting the page makes the old alert appear (checked at read time)
+    sqlx::query("UPDATE users SET allowed_pages='[\"warehouse\",\"jars\"]' WHERE id=$1").bind(u).execute(&pool).await.unwrap();
+    let (_, v) = call(&app, "GET", "/api/notifications/inbox", Some(&ku), None).await;
+    assert_eq!(v["total"], 2);
+    // removing it hides it again
+    sqlx::query("UPDATE users SET allowed_pages='[\"warehouse\"]' WHERE id=$1").bind(u).execute(&pool).await.unwrap();
+    let (_, v) = call(&app, "GET", "/api/notifications/inbox", Some(&ku), None).await;
+    assert_eq!(v["total"], 1);
+    // admin sees everything
+    let adm = make_user(&pool, "adm", true, &[], &["JAR_OVERDUE", "LOW_STOCK"]).await;
+    let (_, v) = call(&app, "GET", "/api/notifications/inbox", Some(&session_for(&pool, adm).await), None).await;
+    assert_eq!(v["total"], 2);
 }
