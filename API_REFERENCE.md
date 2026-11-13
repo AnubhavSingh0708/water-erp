@@ -1,4 +1,4 @@
-# Water Plant ERP – API & Behaviour Contract (v1)
+# Neersagar ERP – API & Behaviour Contract (v1)
 
 This file is the **single source of truth** shared by backend and frontend agents. Backends implement exactly this;
 deviations go in `docs/notes-<owner>.md` and are reconciled by the Lead before the frontends start.
@@ -331,3 +331,7 @@ Static files in `./static/`, served by the same origin. **CSP is `script-src 'se
 7. *Numbers*: `inputmode`, min/max/step from the product config, live pallet↔crate helper, and a visible "Check: you entered N crates = P pallets + L loose" echo to catch typos.
 
 Pages: `index.html, login.html, setup.html, dashboard.html, admin.html, profile.html, raw-materials.html, production.html, qc.html, warehouse.html, qr-labels.html, loading.html, jars.html, maintenance.html`. Shared: `css/styles.css`, `js/api.js` (cookie→header, 401→login redirect, error→toast), `js/events.js` (section 15), `js/nav.js`, `js/ui.js`, `js/jsQR.js` (vendored via `npm pack jsqr`), `sw.js`, `manifest.json`.
+
+---------------------------------------------------------------------------------------------------------------------
+## 16. Branding
+Company: **Neersagar** (setting `plant.name`, code `NSG`, editable in Admin → Settings; defaults applied by migration 0020). Every page title is `Neersagar ERP – <Page>`; the PWA is named "Neersagar ERP" (short name "Neersagar"); app bar, login, setup, gate pass, dispatch note, GRN, transfer and write-off printouts show the plant name from `/api/ref/settings.plant_name`.

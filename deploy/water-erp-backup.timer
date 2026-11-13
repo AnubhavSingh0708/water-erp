@@ -1,5 +1,5 @@
 [Unit]
-Description=Nightly Water Plant ERP backup
+Description=Nightly Neersagar ERP backup
 [Timer]
 OnCalendar=*-*-* 02:30:00
 Persistent=true

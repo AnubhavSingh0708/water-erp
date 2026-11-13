@@ -1,5 +1,5 @@
 [Unit]
-Description=Water Plant ERP
+Description=Neersagar ERP
 After=network-online.target postgresql.service
 Wants=network-online.target
 
