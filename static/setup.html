@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#064a55">
+<title>First-run setup - Water ERP</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/img/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+<div class="auth-wrap">
+  <div id="banners" class="banner-host" style="position:fixed;top:0;left:0;right:0"></div>
+  <main class="auth-card" id="main" style="width:min(100%,30rem)">
+    <div class="auth-brand">
+      <div class="logo"><svg class="i" aria-hidden="true"><use href="/img/icons.svg#shield"/></svg></div>
+      <h1>First-run setup</h1>
+      <p>Create the administrator account. This screen switches itself off permanently once an administrator exists.</p>
+    </div>
+    <div id="state" class="loading-screen" role="status">Checking...</div>
+    <form id="setup" class="stack" novalidate hidden autocomplete="off">
+      <div class="form-error" role="alert"></div>
+      <div class="field" id="token-field">
+        <label for="setup_token">Setup code<span class="req" aria-hidden="true">*</span></label>
+        <input class="input mono" id="setup_token" name="setup_token" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" data-nodraft maxlength="200">
+        <p class="help">The one-time code printed in the server log when it started (look for "setup token"). It proves you control the server.</p>
+        <p class="error"></p>
+      </div>
+      <div class="field">
+        <label for="full_name">Your full name<span class="req" aria-hidden="true">*</span></label>
+        <input class="input" id="full_name" name="full_name" type="text" autocomplete="name" maxlength="120" required>
+        <p class="error"></p>
+      </div>
+      <div class="field">
+        <label for="username">Username<span class="req" aria-hidden="true">*</span></label>
+        <input class="input" id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="40" required>
+        <p class="help">3-40 characters: letters, digits, dot, dash, underscore.</p>
+        <p class="error"></p>
+      </div>
+      <div class="field">
+        <label for="password">Password<span class="req" aria-hidden="true">*</span></label>
+        <div class="input-group">
+          <input class="input" id="password" name="password" type="password" autocomplete="new-password" required maxlength="200" data-nodraft>
+          <button class="addon" id="toggle" type="button" aria-label="Show password" aria-pressed="false"><svg class="i" aria-hidden="true"><use href="/img/icons.svg#eye"/></svg></button>
+        </div>
+        <div class="pw-meter" id="meter" data-score="0" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+        <ul class="rules" id="rules"></ul>
+        <p class="error"></p>
+      </div>
+      <div class="field">
+        <label for="confirm">Repeat password<span class="req" aria-hidden="true">*</span></label>
+        <input class="input" id="confirm" name="confirm" type="password" autocomplete="new-password" required maxlength="200" data-nodraft>
+        <p class="error"></p>
+      </div>
+      <button class="btn primary block" id="submit" type="submit"><span class="btn-icon"><svg class="i" aria-hidden="true"><use href="/img/icons.svg#shield"/></svg></span>Create administrator</button>
+    </form>
+  </main>
+</div>
+<script type="module" src="/js/pages/setup.js"></script>
+</body>
+</html>

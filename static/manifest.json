@@ -1,0 +1,26 @@
+{
+  "name": "Water Plant ERP",
+  "short_name": "Water ERP",
+  "description": "Mineral water plant operations: materials, production, QC, warehouse, loading and jars.",
+  "id": "/",
+  "start_url": "/index.html",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#eef3f6",
+  "theme_color": "#064a55",
+  "lang": "en",
+  "categories": ["business", "productivity"],
+  "icons": [
+    { "src": "/img/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/img/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/img/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/img/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "shortcuts": [
+    { "name": "Dashboard", "url": "/dashboard.html", "icons": [{ "src": "/img/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Loading", "url": "/loading.html", "icons": [{ "src": "/img/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Lab QC", "url": "/qc.html", "icons": [{ "src": "/img/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Warehouse", "url": "/warehouse.html", "icons": [{ "src": "/img/icon-192.png", "sizes": "192x192" }] }
+  ]
+}
