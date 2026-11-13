@@ -20,6 +20,26 @@ pub const EVENT_TYPES: &[(&str, &str)] = &[
     ("STOCK_EXPIRY", "Raw material lot or finished-goods batch nearing expiry"),
 ];
 
+/// Pages whose users may receive/see an event type (Admins: all). Prevents e.g. a user without the `jars` page from learning
+/// customer names via a JAR_OVERDUE alert. Used by: subscription validation, inbox, dashboard recent alerts, push dispatcher.
+pub fn event_pages(code: &str) -> &'static [&'static str] {
+    match code {
+        "LOW_STOCK" | "REORDER_RECOMMENDED" | "STOCK_EXPIRY" => &["raw-materials", "warehouse"],
+        "QC_PENDING" | "QC_APPROVED" | "QC_REJECTED" => &["qc", "production"],
+        "WATER_OUT_OF_RANGE" => &["production", "qc"],
+        "GATE_PASS_ISSUED" | "TRIP_SETTLED" => &["loading"],
+        "JAR_OVERDUE" | "JAR_FLEET_ALERT" => &["jars"],
+        "MAINTENANCE_DUE" => &["maintenance"],
+        "VEHICLE_DOC_EXPIRY" => &["maintenance", "loading"],
+        _ => &[],
+    }
+}
+
+/// May a user with these permissions receive/see this event type?
+pub fn user_may_receive(is_admin: bool, allowed_pages: &[String], code: &str) -> bool {
+    is_admin || event_pages(code).iter().any(|p| allowed_pages.iter().any(|a| a == p))
+}
+
 pub fn is_valid_event(code: &str) -> bool { EVENT_TYPES.iter().any(|(c, _)| *c == code) }
 
 pub struct NewAlert<'a> {
