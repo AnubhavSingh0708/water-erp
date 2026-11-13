@@ -179,9 +179,9 @@ export function createCrud(host, cfg) {
   const listEl = el('div', { 'aria-live': 'polite' });
   const countEl = el('span.muted.small');
   host.append(
-    el('div.row.between', { style: { marginBottom: '12px' } },
-      el('div.row.grow', {}, el('div.searchbar', {}, icon('search', 'sm'), searchIn), cfg.noFilter ? null : filter.el),
-      el('div.row', {}, countEl, ...(cfg.headerActions || []).map((a) => el('button.btn.secondary', { type: 'button', on: { click: () => a.onClick(api_) } }, icon(a.icon || 'plus'), a.label)), addBtn)),
+    el('div.toolbar', {},
+      el('div.searchbar', {}, icon('search', 'sm'), searchIn), cfg.noFilter ? null : filter.el,
+      el('div.toolbar-end', {}, countEl, ...(cfg.headerActions || []).map((a) => el('button.btn.secondary', { type: 'button', on: { click: () => a.onClick(api_) } }, icon(a.icon || 'plus'), a.label)), addBtn)),
     listEl);
   searchIn.addEventListener('input', ui.debounce(() => { q = searchIn.value.trim(); refresh(); }, 300));
 
