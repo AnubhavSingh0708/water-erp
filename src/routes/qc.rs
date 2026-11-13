@@ -116,6 +116,8 @@ async fn approve(State(s): State<AppState>, user: AuthUser, Id(id): Id, body: ax
     let mut tx = s.db.begin().await?;
     let l = lock_batch(&mut tx, id).await?;
     require_quarantine(&l)?;
+    // lock order shared with loading: batch row (above) -> QR sets -> stock
+    sqlx::query("SELECT id FROM qr_crate_sets WHERE batch_id=$1 ORDER BY id FOR UPDATE").bind(id).execute(&mut *tx).await?;
     let last: Option<String> = sqlx::query_scalar("SELECT result FROM qc_tests WHERE batch_id=$1 ORDER BY tested_at DESC, id DESC LIMIT 1").bind(id).fetch_optional(&mut *tx).await?;
     match last.as_deref() {
         None => return Err(AppError::conflict("INVALID_STATE", "QC test required: record a passing lab test before approving")),
@@ -152,6 +154,8 @@ async fn reject(State(s): State<AppState>, user: AuthUser, Id(id): Id, J(b): J<R
     let mut tx = s.db.begin().await?;
     let l = lock_batch(&mut tx, id).await?;
     require_quarantine(&l)?;
+    // lock order shared with loading: batch row (above) -> QR sets -> stock
+    sqlx::query("SELECT id FROM qr_crate_sets WHERE batch_id=$1 ORDER BY id FOR UPDATE").bind(id).execute(&mut *tx).await?;
     let rem: Decimal = sqlx::query_scalar(
         "SELECT COALESCE((SELECT qty FROM stock_balances WHERE item_type='PRODUCT' AND item_id=$1 AND zone='QC_QUARANTINE' AND lot_id=$2 FOR UPDATE), 0)")
         .bind(l.product_id).bind(id).fetch_one(&mut *tx).await?;
