@@ -117,6 +117,8 @@ pub fn hint_for(code: &str) -> Option<&'static str> {
         "RETRY" => "Another user changed the same stock at the same moment. Simply try again.",
         "LOCKED" => "Too many attempts. Wait a few minutes and try again.",
         "UNAVAILABLE" => "Wait a moment and retry. Your entry was not saved. If it keeps happening, tell the administrator.",
+        "RESERVED_STOCK" => "Some of these crates are held by an open loading trip. Remove them from that trip first, then try again.",
+        "PROTECTED" => "This record is built in and cannot be changed this way.",
         "FEATURE_DISABLED" => "This feature is switched off or not configured. Ask an administrator.",
         "INTERNAL" => "Something went wrong on the server. Your entry was not saved. Quote the reference shown to the administrator.",
         _ => return None,
