@@ -53,7 +53,7 @@ export function renderNav(me, current, { onLogout } = {}) {
   if (side) {
     clear(side);
     side.append(
-      el('a.brand', { href: firstAllowed(me).href }, el('span.brand-mark', {}, icon('drop-logo', 'lg')), el('span', {}, el('b', { text: config.plantName || 'Water ERP' }), el('span.small', { text: 'Plant operations' }))),
+      el('a.brand', { href: firstAllowed(me).href }, el('span.brand-mark', {}, icon('neersagar', 'lg')), el('span', {}, el('b.wordmark', { text: 'Neersagar' }), el('span.small', { text: config.plantName && config.plantName !== 'Neersagar' ? config.plantName : 'Plant operations' }))),
       el('nav', { 'aria-label': 'Main' }, items.map((d) => link(d, 'nav-item' + (d.child ? ' child' : ''), current))),
       el('div.side-foot', {},
         el('div.who', {}, el('b', { text: me.full_name || me.username }), me.is_admin ? 'Administrator' : '@' + me.username),

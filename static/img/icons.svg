@@ -60,7 +60,7 @@
 <symbol id="home" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8M5 9.5V21h14V9.5M10 21v-6h4v6"/></symbol>
 <symbol id="install" viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M12 7v7M9 11.5l3 3 3-3"/></symbol>
 <symbol id="spinner" viewBox="0 0 24 24"><path d="M12 3a9 9 0 019 9"/></symbol>
-<symbol id="drop-logo" viewBox="0 0 24 24"><path d="M12 2.5s6.8 6.7 6.8 11.7a6.8 6.8 0 01-13.6 0C5.2 9.2 12 2.5 12 2.5z"/><path d="M8.8 14.5a3.4 3.4 0 003.2 3.2"/></symbol>
+<symbol id="neersagar" viewBox="0 0 24 24"><path d="M12 2.5s6.8 6.7 6.8 11.7a6.8 6.8 0 01-13.6 0C5.2 9.2 12 2.5 12 2.5z"/><path d="M7.7 14c1.3-1.2 2.6-1.2 3.9 0s2.6 1.2 3.9 0M8.5 17.2c1.1-.9 2.2-.9 3.3 0s2.2.9 3.3 0"/></symbol>
 <symbol id="clipboard" viewBox="0 0 24 24"><rect x="5" y="4.5" width="14" height="16.5" rx="2"/><path d="M9 4.5V3h6v1.5M9 11h6M9 15h4"/></symbol>
 <symbol id="route" viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H15a3 3 0 000-6H9a3 3 0 010-6h6.5"/></symbol>
 <symbol id="grid" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></symbol>

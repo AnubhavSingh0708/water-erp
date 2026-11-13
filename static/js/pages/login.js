@@ -27,7 +27,7 @@ document.getElementById('toggle').addEventListener('click', (e) => {
   b.replaceChildren(icon(show ? 'eye-off' : 'eye'));
 });
 
-api.get('/api/ref/settings', null, { retries: 0, noAuthRedirect: true }).then((s) => { if (s && s.plant_name) { document.getElementById('plant').textContent = s.plant_name; document.title = `Sign in - ${s.plant_name}`; } }).catch(() => {});
+api.get('/api/ref/settings', null, { retries: 0, noAuthRedirect: true }).then((s) => { if (s && s.plant_name) { document.getElementById('plant').textContent = s.plant_name === 'Neersagar' ? 'Neersagar ERP' : s.plant_name; } }).catch(() => {});
 api.get('/api/setup/status', null, { retries: 0, noAuthRedirect: true }).then((s) => {
   if (s && s.setup_required) mount(document.getElementById('foot'), 'First time here? ', el('a', { href: '/setup.html', style: { color: 'inherit', fontWeight: 700 }, text: 'Create the administrator account' }));
 }).catch(() => {});

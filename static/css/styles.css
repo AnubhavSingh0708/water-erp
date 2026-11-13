@@ -198,6 +198,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: var(--s4) 0; }
   .sidebar .brand { display: flex; align-items: center; gap: var(--s3); padding: var(--s2) var(--s3) var(--s4); color: #fff; text-decoration: none; }
   .sidebar .brand .brand-mark { display: inline-flex; width: 40px; height: 40px; border-radius: 12px; align-items: center; justify-content: center; background: var(--brand-500); }
   .sidebar .brand b { display: block; font-size: 1.05rem; line-height: 1.15; }
+  .sidebar .brand b.wordmark { letter-spacing: .16em; }
   .sidebar .brand span.small { color: #9fd0d9; }
   .sidebar nav { display: flex; flex-direction: column; gap: 2px; flex: 1; }
   .sidebar a.nav-item {
@@ -551,6 +552,16 @@ dialog.dlg::backdrop { background: var(--overlay); backdrop-filter: blur(2px); a
 .pw-meter[data-score="4"] i { background: var(--ok); }
 .rules { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; }
 .rules li { display: flex; gap: 6px; align-items: center; } .rules li .i { width: 1rem; height: 1rem; } .rules li.met { color: var(--ok); }
+
+/* ---- brand ----------------------------------------------------------------- */
+.wordmark { font-weight: 800; letter-spacing: .14em; text-transform: uppercase; font-size: .95rem; }
+.auth-brand .wordmark { font-size: 1.25rem; color: var(--brand-800); }
+.appbar .titles { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; justify-content: center; line-height: 1.1; }
+.appbar .titles .wm { font-size: .64rem; font-weight: 800; letter-spacing: .2em; text-transform: uppercase; color: #8fd3de; margin-bottom: 1px; }
+.appbar .titles h1 { flex: none; }
+@media (min-width: 1024px) { .appbar .titles .wm { color: var(--brand-600); } }
+.print-header { display: none; }
+@media print { .print-header { display: flex !important; justify-content: space-between; align-items: flex-start; gap: 16px; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 12px; } .print-header .ph-brand { display: flex; gap: 10px; align-items: center; } .print-header .ph-brand .i { stroke-width: 1.8; width: 40px; height: 40px; } .print-header .ph-doc { text-align: right; } }
 
 /* ---- misc --------------------------------------------------------------- */
 .draft-banner { margin-bottom: var(--s3); }

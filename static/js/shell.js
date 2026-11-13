@@ -28,7 +28,7 @@ function scaffold(title) {
   const shell = el('div.shell', {},
     el('aside#sidebar.sidebar', { 'aria-label': 'Navigation' }),
     el('div.shell-main', {},
-      el('header#appbar.appbar', {}, el('span.brand-mark', {}, icon('drop-logo')), el('h1#page-title', { text: title || '' })),
+      el('header#appbar.appbar', {}, el('span.brand-mark', {}, icon('neersagar')), el('div.titles', {}, el('span.wm', { text: 'Neersagar' }), el('h1#page-title', { text: title || '' }))),
       el('div#banners.banner-host'), main));
   document.body.prepend(shell);
   document.body.prepend(el('a.skip', { href: '#main', text: 'Skip to content' }));

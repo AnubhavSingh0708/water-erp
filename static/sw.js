@@ -66,7 +66,7 @@ async function staleWhileRevalidate(req) {
 self.addEventListener('push', (e) => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch { d = { title: 'Notification', body: e.data ? e.data.text() : '' }; }
-  const title = d.title || 'Water ERP';
+  const title = d.title || 'Neersagar ERP';
   e.waitUntil(self.registration.showNotification(title, {
     body: d.body || '', tag: d.tag || (d.alert_id ? `alert-${d.alert_id}` : undefined), renotify: !!d.tag,
     icon: '/img/icon-192.png', badge: '/img/icon-192.png', data: { url: d.url || '/dashboard.html' },

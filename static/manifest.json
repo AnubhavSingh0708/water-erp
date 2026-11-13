@@ -1,7 +1,7 @@
 {
-  "name": "Water Plant ERP",
-  "short_name": "Water ERP",
-  "description": "Mineral water plant operations: materials, production, QC, warehouse, loading and jars.",
+  "name": "Neersagar ERP",
+  "short_name": "Neersagar",
+  "description": "Neersagar mineral water plant operations: materials, production, QC, warehouse, loading and jars.",
   "id": "/",
   "start_url": "/index.html",
   "scope": "/",

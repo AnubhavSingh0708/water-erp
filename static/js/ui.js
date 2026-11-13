@@ -56,7 +56,7 @@ export const debounce = (fn, ms = 300) => { let t; const d = (...a) => { clearTi
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /* ---------------------------------------------------------------- config + user (set by shell.js) */
-export const config = { utcOffsetMinutes: null, plantName: '', user: null, qrLabels: false, settings: {} };
+export const config = { utcOffsetMinutes: null, plantName: 'Neersagar', user: null, qrLabels: false, settings: {} };
 export function setConfig(c) { Object.assign(config, c); }
 
 /* ---------------------------------------------------------------- formatters */
@@ -488,7 +488,18 @@ export function qtyInput(o) {
 export async function copyText(text) {
   try { await navigator.clipboard.writeText(text); toast.ok('Copied'); } catch { toast.warn('Could not copy - select and copy manually'); }
 }
-export function setTitle(t) { document.title = t ? `${t} - ${config.plantName || 'Water ERP'}` : (config.plantName || 'Water ERP'); }
+/**
+ * printHeader({title, subtitle, docNo, date}) -> <header class="print-header"> with logomark + "Neersagar" + plant name (from /api/ref/settings).
+ * Visible only when printing. Put it first inside the printable region (gate pass, GRN, count sheet...).
+ */
+export function printHeader({ title = '', subtitle = '', docNo = '', date } = {}) {
+  const plant = config.plantName && config.plantName !== 'Neersagar' ? config.plantName : (config.settings && config.settings.plant_code ? `Plant ${config.settings.plant_code}` : 'Mineral water plant');
+  return el('header.print-header.print-only', {},
+    el('div.ph-brand', {}, icon('neersagar', 'xl'), el('div', {}, el('b.wordmark', { text: 'Neersagar' }), el('div', { text: plant }))),
+    el('div.ph-doc', {}, title ? el('b', { text: title }) : null, docNo ? el('div.mono', { text: docNo }) : null, subtitle ? el('div', { text: subtitle }) : null,
+      el('div.small', { text: date || fmtDateTime(new Date().toISOString()) })));
+}
+export function setTitle(t) { document.title = t ? `Neersagar ERP \u2013 ${t}` : 'Neersagar ERP'; }
 export function safeNext(next, fallback = '/') {
   if (typeof next !== 'string' || !next.startsWith('/') || next.startsWith('//') || next.startsWith('/\\') || /[\r\n]/.test(next)) return fallback;
   if (/^\/(login|setup)\.html/.test(next)) return fallback;
