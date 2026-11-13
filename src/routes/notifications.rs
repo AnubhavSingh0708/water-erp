@@ -12,7 +12,7 @@ use crate::{
     validate::PageQuery,
 };
 use axum::{
-    extract::{Path, State},
+    extract::State,
     http::{header, HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
@@ -25,7 +25,7 @@ use std::{collections::{BTreeSet, HashMap}, sync::Mutex, time::{Duration, Instan
 use uuid::Uuid;
 
 pub mod extract;
-use extract::{ApiJson, ApiQuery};
+use extract::{ApiJson, ApiPath, ApiQuery};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -216,7 +216,7 @@ async fn unread_count(State(s): State<AppState>, u: AuthUser) -> AppResult<Json<
     Ok(Json(json!({ "count": n })))
 }
 
-async fn mark_read(State(s): State<AppState>, u: AuthUser, Path(id): Path<Uuid>) -> AppResult<StatusCode> {
+async fn mark_read(State(s): State<AppState>, u: AuthUser, ApiPath(id): ApiPath<Uuid>) -> AppResult<StatusCode> {
     // only alerts inside the caller's subscriptions can be marked: anything else is a plain 404 (no existence probing)
     let visible: bool = sqlx::query_scalar(&format!("SELECT EXISTS (SELECT 1 FROM alerts a WHERE a.id = $2 AND {VISIBLE})")).bind(u.id).bind(id).fetch_one(&s.db).await?;
     if !visible { return Err(AppError::not_found("notification")); }

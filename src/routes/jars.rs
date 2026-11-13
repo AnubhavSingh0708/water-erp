@@ -4,7 +4,7 @@
 //! `QC_QUARANTINE`/`FG_READY`), in vehicles of DISPATCHED trips, at customers (`jar_ledger`) – and leave the fleet through
 //! `SCRAP_YARD` (destroyed). Every lifecycle change writes a `jar_fleet_events` row in the same transaction. Stock changes go only
 //! through `crate::stock`; a customer's holding is serialised with an advisory lock and can never go negative (DB trigger 0014 as backstop).
-use super::notifications::extract::{de_int, de_opt_int, is_dry_run, opt_date, opt_uuid, ApiJson, ApiQuery};
+use super::notifications::extract::{de_int, de_opt_int, is_dry_run, opt_date, opt_uuid, ApiJson, ApiPath, ApiQuery};
 use crate::{
     audit,
     auth::AuthUser,
@@ -15,7 +15,7 @@ use crate::{
     validate::{self, PageQuery},
 };
 use axum::{
-    extract::{Path, State},
+    extract::State,
     http::{StatusCode, Uri},
     routing::{get, post},
     Json, Router,
@@ -407,7 +407,7 @@ async fn customers(State(s): State<AppState>, _u: AuthUser, ApiQuery(q): ApiQuer
 #[derive(Deserialize, Default)]
 struct LedgerQuery { product_id: Option<String>, limit: Option<i64>, offset: Option<i64> }
 
-async fn customer_ledger(State(s): State<AppState>, _u: AuthUser, Path(id): Path<Uuid>, ApiQuery(q): ApiQuery<LedgerQuery>) -> AppResult<Json<Value>> {
+async fn customer_ledger(State(s): State<AppState>, _u: AuthUser, ApiPath(id): ApiPath<Uuid>, ApiQuery(q): ApiQuery<LedgerQuery>) -> AppResult<Json<Value>> {
     let product = opt_uuid("product_id", &q.product_id)?;
     let p = PageQuery { limit: q.limit, offset: q.offset };
     let mut c = s.db.acquire().await?;

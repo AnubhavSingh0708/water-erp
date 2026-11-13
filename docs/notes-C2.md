@@ -80,3 +80,16 @@ Deviations from `API_REFERENCE.md`, decisions and hand-offs. Everything here is 
   whose key is no longer current** (set difference), so completed/moved/deactivated/renewed items clear themselves. Already-open alerts get their title/severity refreshed in
   place (DUE_SOON -> OVERDUE) without re-notifying. Keys: see the header of `workers/maintenance.rs`. `JAR_FLEET_ALERT` keys (contract has none):
   `<product_id>:HIGH_DESTROY_RATE` and `<product_id>:NEAR_RETIREMENT`.
+
+## Hand-offs, requests and known gaps
+
+* **Lead – `error.rs` hint:** `hint_for("FEATURE_DISABLED")` says an administrator can enable it "in Settings"; for Web Push (`POST /push/test` without VAPID keys) the real fix
+  is generating keys (`water-erp gen-vapid`) and setting `VAPID_PRIVATE_KEY` + restart. Consider a code-specific message or hint.
+* **Lead – branch base:** the worktree branch `worktree-agent-a7135c985a9e28055` was created at the initial commit `8be844a`; it was reset to the Lead's `51dbd5c` before any work.
+* **No new crates requested.** (`url` is not a direct dependency, so the endpoint validator is hand-written; `async-trait`, `futures`, `p256`, `base64`, `web-push-native`, `reqwest` already present.)
+* **A (seed):** the new `jar_ledger` constraint trigger also applies to seed data: seeded customer holdings must not net below zero per (customer, product).
+* **C1 (settlement):** see Tier 2 note – final per-(customer, product) sum must be >= 0 at COMMIT; the trigger takes an advisory lock then.
+* Trailing-dot hosts (`example.com.`) are rejected by the endpoint validator because the DNS pin key would differ from the host the HTTP client connects to.
+* Path-id extractor errors (`ApiPath`) return the standard envelope (`400 BAD_REQUEST`).
+* **Known gaps:** the real `WebPushSender` was only exercised up to "connection failed" (sandbox has no push-service egress; request building/encryption is unit-tested by
+  decrypting with the browser key). No `?dry_run` on maintenance `complete` (not required by the contract). Push delivery is at-most-once (no retry of transient failures).

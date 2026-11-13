@@ -2,7 +2,7 @@
 //! Shared by the C2 route modules (jars, maintenance, notifications).
 use crate::error::AppError;
 use axum::{
-    extract::{rejection::JsonRejection, FromRequest, FromRequestParts, Query, Request},
+    extract::{rejection::JsonRejection, FromRequest, FromRequestParts, Path, Query, Request},
     http::request::Parts,
     Json,
 };
@@ -47,6 +47,23 @@ where
         match Query::<T>::from_request_parts(parts, state).await {
             Ok(Query(v)) => Ok(ApiQuery(v)),
             Err(_) => Err(AppError::bad("Invalid query string")),
+        }
+    }
+}
+
+/// `Path<T>` with an envelope error (malformed ids -> 400 instead of axum's plain text).
+pub struct ApiPath<T>(pub T);
+
+impl<S, T> FromRequestParts<S> for ApiPath<T>
+where
+    S: Send + Sync,
+    T: DeserializeOwned + Send,
+{
+    type Rejection = AppError;
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        match Path::<T>::from_request_parts(parts, state).await {
+            Ok(Path(v)) => Ok(ApiPath(v)),
+            Err(_) => Err(AppError::bad("Invalid id in the URL")),
         }
     }
 }

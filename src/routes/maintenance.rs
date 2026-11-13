@@ -3,7 +3,7 @@
 //!
 //! Status rule (plant-local date from `util::plant_today`): `OVERDUE` when the due/expiry date is before today, `DUE_SOON` when it is
 //! within `alerts.expiry_lead_days` (inclusive, today counts as due), else `OK`.
-use super::notifications::extract::{opt_uuid, ApiJson, ApiQuery};
+use super::notifications::extract::{opt_uuid, ApiJson, ApiPath, ApiQuery};
 use crate::{
     audit,
     auth::AuthUser,
@@ -12,7 +12,7 @@ use crate::{
     util, validate,
 };
 use axum::{
-    extract::{Path, State},
+    extract::State,
     routing::{get, post},
     Json, Router,
 };
@@ -145,7 +145,7 @@ async fn vehicle_docs(State(s): State<AppState>, _u: AuthUser, ApiQuery(q): ApiQ
 #[serde(deny_unknown_fields)]
 struct CompleteReq { done_on: Option<NaiveDate>, notes: Option<String>, next_due_on: Option<NaiveDate> }
 
-async fn complete(State(s): State<AppState>, u: AuthUser, Path(id): Path<Uuid>, ApiJson(b): ApiJson<CompleteReq>) -> AppResult<Json<Value>> {
+async fn complete(State(s): State<AppState>, u: AuthUser, ApiPath(id): ApiPath<Uuid>, ApiJson(b): ApiJson<CompleteReq>) -> AppResult<Json<Value>> {
     let notes = match &b.notes { Some(n) => validate::text("notes", n, 500)?, None => String::new() };
     let mut tx = s.db.begin().await?;
     // the schedule row is the gate: lock it and decide on its CURRENT state
@@ -184,7 +184,7 @@ async fn complete(State(s): State<AppState>, u: AuthUser, Path(id): Path<Uuid>, 
     Ok(Json(out))
 }
 
-async fn logs(State(s): State<AppState>, _u: AuthUser, Path(id): Path<Uuid>) -> AppResult<Json<Value>> {
+async fn logs(State(s): State<AppState>, _u: AuthUser, ApiPath(id): ApiPath<Uuid>) -> AppResult<Json<Value>> {
     let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM maintenance_schedules WHERE id = $1)").bind(id).fetch_one(&s.db).await?;
     if !exists { return Err(AppError::not_found("schedule")); }
     let rows = sqlx::query(

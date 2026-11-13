@@ -179,3 +179,15 @@ async fn push_test_goes_only_to_own_subscriptions(pool: PgPool) {
     assert_eq!(r["sent"], 1);
     assert_eq!(*m.0.lock().unwrap(), vec![a]);
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn malformed_ids_use_the_error_envelope(pool: PgPool) {
+    let (app, _) = app(pool.clone()).await;
+    let a = make_user(&pool, "a", true, &[], &[]).await;
+    let k = session_for(&pool, a).await;
+    for (m, p) in [("POST", "/api/notifications/inbox/not-a-uuid/read"), ("GET", "/api/jars/customers/xyz/ledger"), ("GET", "/api/maintenance/schedules/1/logs")] {
+        let (s, v) = call(&app, m, p, Some(&k), None).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{p}");
+        assert_eq!(v["error"]["code"], "BAD_REQUEST", "{p}: {v}");
+    }
+}

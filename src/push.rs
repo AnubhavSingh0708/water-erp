@@ -122,7 +122,8 @@ pub fn validate_endpoint(url: &str) -> Result<(), String> {
 
 fn validate_host(host: &str) -> Result<(), String> {
     let host = host.to_ascii_lowercase();
-    let host = host.strip_suffix('.').unwrap_or(&host);
+    let host = host.as_str();
+    // a trailing dot ("example.com.") is a different key for DNS pinning than "example.com": refuse it outright
     if host.is_empty() || host.len() > 253 { return Err("invalid host name".into()); }
     let labels: Vec<&str> = host.split('.').collect();
     if labels.len() < 2 { return Err("host must be a fully-qualified DNS name".into()); }
@@ -185,7 +186,7 @@ pub fn endpoint_host(url: &str) -> Option<String> {
     let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let a = &rest[..end];
     let h = a.rsplit_once(':').map(|(h, _)| h).unwrap_or(a);
-    Some(h.trim_end_matches('.').to_ascii_lowercase())
+    Some(h.to_ascii_lowercase())
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -325,7 +326,7 @@ mod tests {
             "https://user@example.com/x", "https://user:pw@example.com/x", "https://example.com@evil.com/x", "https://evil.com\\@example.com/x",
             "https://example.com:8443/x", "https://example.com:80/x", "https://example.com:/x", "https://example.com:443@127.0.0.1/",
             "https://exa mple.com/x", "https://example.com/\n", "https://exämple.com/x", "https://exa%6Dple.com/x", "https://-bad.example.com/x",
-            "https://bad..example.com/x", "https://.example.com/x", "https://exa_mple.com/x",
+            "https://bad..example.com/x", "https://.example.com/x", "https://fcm.googleapis.com./fcm/send/x", "https://example.com.:443/x", "https://exa_mple.com/x",
         ];
         for u in bad { assert!(validate_endpoint(u).is_err(), "should reject {u:?}"); }
         let long = format!("https://example.com/{}", "a".repeat(600));
@@ -340,8 +341,16 @@ mod tests {
             "https://web.push.apple.com/QGxyz",
             "https://wns2-par02p.notify.windows.com/w/?token=abc",
             "https://HTTPS-Push.Example.com:443/x?y=z#frag",
-            "https://fcm.googleapis.com./fcm/send/x",
         ] { assert!(validate_endpoint(u).is_ok(), "should accept {u}: {:?}", validate_endpoint(u)); }
+    }
+
+    #[test]
+    fn pinned_host_equals_the_host_reqwest_will_connect_to() {
+        for u in ["https://fcm.googleapis.com/fcm/send/x", "https://HTTPS-Push.Example.com:443/x?y=z#frag", "https://web.push.apple.com/Q"] {
+            assert!(validate_endpoint(u).is_ok());
+            let uri: http::Uri = u.parse().unwrap();
+            assert_eq!(endpoint_host(u).unwrap(), uri.host().unwrap().to_ascii_lowercase(), "{u}");
+        }
     }
 
     #[test]
