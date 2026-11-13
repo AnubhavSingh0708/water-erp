@@ -194,6 +194,9 @@ async fn user_godown_restriction_round_trip(pool: PgPool) {
     let key = login["key"].as_str().unwrap().to_string();
     let (_, me) = req(&app, "GET", "/api/me", Some(&key), None).await;
     assert_eq!(me["allowed_location_ids"], json!([g1, g2]));
+    let (s, ses) = req(&app, "GET", &format!("/api/admin/sessions?user_id={uid}"), Some(&k), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(ses[0]["allowed_location_ids"], json!([g1, g2]), "sessions list shows the restriction");
     let st = common::state(pool.clone()).await;
     let au = water_erp::auth::authenticate(&st, &key).await.unwrap();
     assert!(au.can_use_location(g1.parse().unwrap()) && au.can_use_location(g2.parse().unwrap()) && !au.can_use_location(MAIN_LOCATION));

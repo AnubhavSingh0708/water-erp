@@ -238,6 +238,7 @@ struct SessionObj {
     expires_at: DateTime<Utc>,
     user_agent: Option<String>,
     ip: Option<String>,
+    allowed_location_ids: Value,
     is_current: bool,
 }
 
@@ -246,7 +247,7 @@ struct SessionQuery { user_id: Option<Uuid> }
 
 async fn list_sessions(State(st): State<AppState>, actor: AuthUser, ApiQuery(q): ApiQuery<SessionQuery>) -> AppResult<Json<Vec<SessionObj>>> {
     let rows = sqlx::query_as::<_, SessionObj>(
-        "SELECT s.id, s.user_id, u.username, s.created_at, s.last_used_at, s.expires_at, s.user_agent, s.ip, (s.id = $1) AS is_current
+        "SELECT s.id, s.user_id, u.username, s.created_at, s.last_used_at, s.expires_at, s.user_agent, s.ip, u.allowed_location_ids, (s.id = $1) AS is_current
          FROM user_sessions s JOIN users u ON u.id = s.user_id
          WHERE s.expires_at > now() AND ($2::uuid IS NULL OR s.user_id = $2)
          ORDER BY s.last_used_at DESC LIMIT 500")
