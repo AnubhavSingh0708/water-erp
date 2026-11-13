@@ -52,7 +52,7 @@ struct ListQ { category: Option<String>, q: Option<String>, low: Option<String>,
 const MAT_BASE: &str = "
 WITH burn AS (
   SELECT item_id, -SUM(qty_delta) AS used FROM stock_ledger
-  WHERE item_type='RAW' AND txn_type IN ('BLOW_ISSUE','BATCH_CONSUME') AND at >= now() - make_interval(days => $4::int) GROUP BY item_id),
+  WHERE item_type='RAW' AND txn_type IN ('BLOW_ISSUE','BATCH_CONSUME','BATCH_WASTE') AND at >= now() - make_interval(days => $4::int) GROUP BY item_id),
 st AS (
   SELECT item_id, SUM(qty) FILTER (WHERE zone='RM_STORE') AS rm, SUM(qty) FILTER (WHERE zone <> 'SCRAP_YARD') AS total
   FROM stock_balances WHERE item_type='RAW' GROUP BY item_id)

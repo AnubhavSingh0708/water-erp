@@ -1,7 +1,7 @@
 //! Reorder / low-stock engine + stock-expiry check (OWNER B).
 //!
 //! Per active, non-EMPTY_BOTTLE raw material (API_REFERENCE §5):
-//!   burn          = Σ(−delta of RAW rows with txn_type ∈ {BLOW_ISSUE, BATCH_CONSUME} in the last N days) / N
+//!   burn          = Σ(−delta of RAW rows with txn_type ∈ {BLOW_ISSUE, BATCH_CONSUME, BATCH_WASTE} in the last N days) / N
 //!   reorder_point = burn × (supplier.lead_time_days + safety_stock_days),   current = RM_STORE quantity
 //!   BELOW_MIN: current < min_stock · BURN_RATE: burn > 0 and current ≤ reorder_point · BOTH
 //!   target = 2 × max(min_stock, reorder_point), suggested_qty_purchase = ceil((target − current − on_order) / stock_per_purchase_unit) ≥ 1
@@ -66,7 +66,7 @@ pub async fn evaluate(conn: &mut PgConnection, st: &Settings, rm_id: Uuid) -> Ap
         "SELECT m.name, m.min_stock, m.stock_per_purchase_unit AS spp, m.default_supplier_id, COALESCE(s.lead_time_days, 7) AS lead,
                 COALESCE((SELECT SUM(qty) FROM stock_balances WHERE item_type='RAW' AND item_id=m.id AND zone='RM_STORE'), 0) AS cur,
                 COALESCE((SELECT -SUM(qty_delta) FROM stock_ledger WHERE item_type='RAW' AND item_id=m.id
-                          AND txn_type IN ('BLOW_ISSUE','BATCH_CONSUME') AND at >= now() - make_interval(days => $2::int)), 0) AS used,
+                          AND txn_type IN ('BLOW_ISSUE','BATCH_CONSUME','BATCH_WASTE') AND at >= now() - make_interval(days => $2::int)), 0) AS used,
                 COALESCE((SELECT SUM(GREATEST(l.qty_ordered - l.qty_received, 0)) FROM po_lines l JOIN purchase_orders o ON o.id = l.po_id
                           WHERE l.raw_material_id = m.id AND o.status IN ('OPEN','PARTIAL')), 0) * m.stock_per_purchase_unit AS on_order,
                 EXISTS(SELECT 1 FROM reorder_recommendations r WHERE r.raw_material_id = m.id AND r.status = 'DISMISSED'

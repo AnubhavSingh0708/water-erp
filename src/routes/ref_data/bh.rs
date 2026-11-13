@@ -232,3 +232,20 @@ pub fn json_resp(v: Value) -> Response { Json(v).into_response() }
 
 /// Decide whether `?format=csv` was requested.
 pub fn is_csv(format: &Option<String>) -> bool { matches!(format.as_deref(), Some("csv")) }
+
+/// SQL fragment (aliases `b` = production_batches, `p` = products) for the standard batch summary object.
+macro_rules! batch_j {
+    () => {
+        "jsonb_build_object('id', b.id, 'batch_no', b.batch_no, 'product_id', b.product_id, 'product_name', p.name, 'product_code', p.code, 'kind', p.kind,
+           'crates', b.crates, 'qc_status', b.qc_status, 'produced_on', b.produced_on, 'mfg_date', b.mfg_date, 'expiry_date', b.expiry_date, 'shift', b.shift,
+           'created_at', b.created_at, 'decided_at', b.qc_decided_at, 'crates_per_pallet', p.crates_per_pallet,
+           'pallets', b.crates / p.crates_per_pallet, 'loose_crates', b.crates % p.crates_per_pallet)"
+    };
+}
+pub(crate) use batch_j;
+
+/// Plant-local calendar date of a timestamptz column, with the plant offset in minutes bound as parameter `$n` (pass "$7" etc).
+macro_rules! local_date {
+    ($col:expr, $n:expr) => { concat!("((", $col, " AT TIME ZONE 'UTC') + make_interval(mins => ", $n, "::int))::date") };
+}
+pub(crate) use local_date;
