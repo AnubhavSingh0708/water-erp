@@ -4,7 +4,7 @@ use sqlx::PgConnection;
 
 /// Next human-readable document number such as `PO-261113-0007`. `seq` must be one of the sequences created by the migrations.
 pub async fn next_no(conn: &mut PgConnection, seq: &'static str, prefix: &str) -> AppResult<String> {
-    const OK: &[&str] = &["po_seq", "grn_seq", "blow_seq", "batch_seq", "trip_seq", "gatepass_seq", "qr_seq", "dn_seq", "wo_seq", "cnt_seq", "rtv_seq"];
+    const OK: &[&str] = &["po_seq", "grn_seq", "blow_seq", "batch_seq", "trip_seq", "gatepass_seq", "qr_seq", "dn_seq", "wo_seq", "cnt_seq", "rtv_seq", "tf_seq"];
     debug_assert!(OK.contains(&seq));
     if !OK.contains(&seq) { return Err(AppError::bad("bad sequence")); }
     let n: i64 = sqlx::query_scalar(&format!("SELECT nextval('{seq}')")).fetch_one(&mut *conn).await?;
@@ -26,4 +26,23 @@ pub async fn plant_today(conn: &mut PgConnection) -> AppResult<chrono::NaiveDate
         .fetch_optional(&mut *conn).await?;
     let mins = off.and_then(|v| v.as_i64()).unwrap_or(330);
     Ok((chrono::Utc::now() + chrono::Duration::minutes(mins)).date_naive())
+}
+
+/// Resolve the godown a request acts on. `requested` = explicit `location_id` from the client.
+/// Omitted => the user's only allowed godown if they are restricted to exactly one, else MAIN.
+/// Always validates: exists, active, not the system TRANSIT location, and the user may use it.
+pub async fn resolve_location(conn: &mut PgConnection, user: &crate::auth::AuthUser, requested: Option<uuid::Uuid>) -> AppResult<uuid::Uuid> {
+    let id = match requested {
+        Some(id) => id,
+        None if !user.is_admin && user.allowed_location_ids.len() == 1 => user.allowed_location_ids[0],
+        None => crate::stock::MAIN_LOCATION,
+    };
+    let ok: Option<(String, bool)> = sqlx::query_as("SELECT kind, is_active FROM locations WHERE id = $1").bind(id).fetch_optional(&mut *conn).await?;
+    match ok {
+        Some((kind, true)) if kind != "TRANSIT" => {}
+        Some(_) => return Err(AppError::field("location_id", "this godown is inactive or not selectable")),
+        None => return Err(AppError::field("location_id", "unknown godown")),
+    }
+    user.require_location(id)?;
+    Ok(id)
 }

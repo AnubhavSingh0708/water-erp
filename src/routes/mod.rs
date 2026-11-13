@@ -15,6 +15,7 @@ use tower_http::{compression::CompressionLayer, services::ServeDir, set_header::
 pub mod admin;      // A  /api/admin/*
 pub mod auth_routes; // A  /api/auth/login, /api/setup/*, /api/me/*
 pub mod dashboard;  // B  /api/dashboard
+pub mod godowns;    // B  /api/godowns/*  (inter-godown transfers)
 pub mod jars;       // C  /api/jars/*
 pub mod loading;    // C  /api/loading/*
 pub mod maintenance; // C /api/maintenance/*
@@ -149,6 +150,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/api/production", guarded(&["production"], production::router()))
         .nest("/api/qc", guarded(&["qc"], qc::router()))
         .nest("/api/warehouse", guarded(&["warehouse"], warehouse::router()))
+        .nest("/api/godowns", guarded(&["warehouse"], godowns::router()))
         .nest("/api/qr", guarded(&["qr-labels", "loading"], qr::router().layer(middleware::from_fn_with_state(state.clone(), qr_feature_gate))))
         .nest("/api/loading", guarded(&["loading"], loading::router()))
         .nest("/api/jars", guarded(&["jars"], jars::router()))

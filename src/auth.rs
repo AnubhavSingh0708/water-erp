@@ -31,6 +31,8 @@ pub struct AuthUser {
     pub is_admin: bool,
     pub allowed_pages: Vec<String>,
     pub subscribed_notifications: Vec<String>,
+    /// Godowns this user may work in; empty = all godowns.
+    pub allowed_location_ids: Vec<Uuid>,
     pub session_id: Uuid,
 }
 
@@ -38,6 +40,14 @@ impl AuthUser {
     /// Admins can open every page; others only what is in `allowed_pages`.
     pub fn can_access(&self, page: &str) -> bool {
         self.is_admin || self.allowed_pages.iter().any(|p| p == page)
+    }
+    /// Admins and users with no explicit godown list may use every godown.
+    pub fn can_use_location(&self, location: Uuid) -> bool {
+        self.is_admin || self.allowed_location_ids.is_empty() || self.allowed_location_ids.contains(&location)
+    }
+    /// Same rule as an error-returning check for handlers: `user.require_location(loc)?`.
+    pub fn require_location(&self, location: Uuid) -> Result<(), AppError> {
+        if self.can_use_location(location) { Ok(()) } else { Err(AppError::forbidden("You do not have access to this godown")) }
     }
 }
 
@@ -76,7 +86,7 @@ pub async fn authenticate(state: &AppState, key: &str) -> Result<AuthUser, AppEr
     let hash = hash_key(key);
     let row = sqlx::query(
         "SELECT s.id AS sid, s.last_used_at, s.expires_at, u.id AS uid, u.username, u.full_name, u.is_admin, u.is_active,
-                u.allowed_pages, u.subscribed_notifications
+                u.allowed_pages, u.subscribed_notifications, u.allowed_location_ids
          FROM user_sessions s JOIN users u ON u.id = s.user_id WHERE s.key_hash = $1")
         .bind(&hash).fetch_optional(&state.db).await?;
     let row = row.ok_or(AppError::Unauthorized)?;
@@ -94,6 +104,7 @@ pub async fn authenticate(state: &AppState, key: &str) -> Result<AuthUser, AppEr
         id: row.get("uid"), username: row.get("username"), full_name: row.get("full_name"), is_admin: row.get("is_admin"),
         allowed_pages: json_strings(row.get("allowed_pages")),
         subscribed_notifications: json_strings(row.get("subscribed_notifications")),
+        allowed_location_ids: json_strings(row.get("allowed_location_ids")).iter().filter_map(|x| x.parse().ok()).collect(),
         session_id: sid,
     })
 }

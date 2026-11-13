@@ -28,6 +28,9 @@ async fn main() -> anyhow::Result<()> {
         water_erp::routes::admin::bootstrap_admin(&state.db, user, &pw).await?;
     }
 
+    // first-run: print the one-time setup token when no Admin exists yet (setup screen is locked without it)
+    if let Err(e) = routes::auth_routes::announce_setup_token(&state.db).await { tracing::warn!(error = ?e, "could not prepare first-run setup token"); }
+
     workers::spawn_all(state.clone());
     let app = routes::build_router(state.clone());
     let shutdown = state.shutdown.clone();
@@ -40,14 +43,14 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("serving PLAIN HTTP on {} (insecure-http)", cfg.bind);
         let l = tokio::net::TcpListener::bind(cfg.bind).await?;
         let sd = shutdown.clone();
-        axum::serve(l, app).with_graceful_shutdown(async move { sd.wait().await }).await?;
+        axum::serve(l, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(async move { sd.wait().await }).await?;
     } else {
         let rustls_cfg = tls::rustls_config(&cfg).await?;
         tracing::info!("serving HTTPS on {} ({:?} mode)", cfg.bind, if cfg.mode == Mode::Local { "local" } else { "domain" });
         let handle = axum_server::Handle::new();
         let (h, sd) = (handle.clone(), shutdown.clone());
         tokio::spawn(async move { sd.wait().await; h.graceful_shutdown(Some(std::time::Duration::from_secs(25))); });
-        axum_server::bind_rustls(cfg.bind, rustls_cfg).handle(handle).serve(app.into_make_service()).await?;
+        axum_server::bind_rustls(cfg.bind, rustls_cfg).handle(handle).serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await?;
     }
     // Order: stop accepting + drain requests (above) -> let workers notice the signal -> close DB pool.
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
