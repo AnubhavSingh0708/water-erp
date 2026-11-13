@@ -66,7 +66,7 @@ pub async fn requirements(conn: &mut PgConnection, p: &ProductInfo, crates: i64)
     Ok((out, litres))
 }
 
-async fn available(conn: &mut PgConnection, r: &Req) -> AppResult<Decimal> { Ok(stock::available(conn, r.item, r.item_id, r.zone).await?) }
+async fn available(conn: &mut PgConnection, loc: Uuid, r: &Req) -> AppResult<Decimal> { Ok(stock::available_at(conn, loc, r.item, r.item_id, r.zone).await?) }
 
 fn line_json(r: &Req, avail: Decimal, extra_required: Decimal) -> Value {
     let total = r.required + extra_required;
@@ -76,24 +76,25 @@ fn line_json(r: &Req, avail: Decimal, extra_required: Decimal) -> Value {
 }
 
 #[derive(Deserialize, Default)]
-pub struct BomQ { product_id: Option<Uuid>, crates: Option<i64> }
+pub struct BomQ { product_id: Option<Uuid>, crates: Option<i64>, location_id: Option<Uuid> }
 
-pub async fn bom_check(State(s): State<AppState>, Q(q): Q<BomQ>) -> AppResult<Json<Value>> {
+pub async fn bom_check(State(s): State<AppState>, user: AuthUser, Q(q): Q<BomQ>) -> AppResult<Json<Value>> {
     let pid = q.product_id.ok_or_else(|| AppError::field("product_id", "is required"))?;
     let crates = q.crates.ok_or_else(|| AppError::field("crates", "is required"))?;
     validate::count("crates", crates)?;
     let mut c = s.db.acquire().await?;
+    let loc = bh::production_location(&mut c, &user, q.location_id).await?;
     let p = load_product(&mut c, pid).await?;
     let (reqs, litres) = requirements(&mut c, &p, crates).await?;
     let mut lines = vec![];
     let mut ok = !reqs.is_empty();
     for r in &reqs {
-        let a = available(&mut c, r).await?;
+        let a = available(&mut c, loc, r).await?;
         if a < r.required { ok = false; }
         lines.push(line_json(r, a, Decimal::ZERO));
     }
     let (pal, loose) = bh::pallets(crates, p.crates_per_pallet.map(|x| x as i64));
-    Ok(Json(json!({ "ok": ok, "product_id": p.id, "product_name": p.name, "kind": p.kind, "crates": crates, "litres": litres.map(|l| l.normalize().to_string()),
+    Ok(Json(json!({ "ok": ok, "location_id": loc, "product_id": p.id, "product_name": p.name, "kind": p.kind, "crates": crates, "litres": litres.map(|l| l.normalize().to_string()),
         "crates_per_pallet": p.crates_per_pallet, "pallets": pal, "loose_crates": loose, "lines": lines })))
 }
 
@@ -107,7 +108,7 @@ pub struct WasteReq { raw_material_id: Uuid, qty: D, reason: String }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BatchReq {
-    product_id: Uuid, crates: i64, shift: String, produced_on: Option<NaiveDate>, water_log_id: Option<Uuid>, notes: Option<String>,
+    location_id: Option<Uuid>, product_id: Uuid, crates: i64, shift: String, produced_on: Option<NaiveDate>, water_log_id: Option<Uuid>, notes: Option<String>,
     #[serde(default)] waste: Vec<WasteReq>,
     #[serde(default)] confirm: bool,
 }
@@ -132,6 +133,7 @@ pub async fn create(State(s): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>, J
     }
     let st = s.settings.get();
     let mut tx = s.db.begin().await?;
+    let loc = bh::production_location(&mut tx, &user, b.location_id).await?;
     let today = util::plant_today(&mut tx).await?;
     let produced_on = b.produced_on.unwrap_or(today);
     bh::check_entry_date("produced_on", produced_on, today, 30)?;
@@ -163,7 +165,7 @@ pub async fn create(State(s): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>, J
     let mut lines_json = vec![];
     for (i, r) in reqs.iter().enumerate() {
         let extra: Decimal = waste.iter().filter(|w| w.0 == i).map(|w| w.1).sum();
-        let a = available(&mut tx, r).await?;
+        let a = available(&mut tx, loc, r).await?;
         if a < r.required + extra {
             shortages.push(json!({ "raw_material_id": if r.container { Value::Null } else { json!(r.item_id) }, "item_type": r.item.as_str(), "item_id": r.item_id, "name": r.name,
                 "zone": r.zone, "required": (r.required + extra).to_string(), "available": a.to_string() }));
@@ -206,28 +208,28 @@ pub async fn create(State(s): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>, J
     // insert + consume (deterministic lock order across concurrent batches)
     let id = Uuid::new_v4();
     let batch_no = bh::doc_no(&mut tx, "batch_seq", &format!("{}-B", st.plant_code), dry).await?;
-    sqlx::query("INSERT INTO production_batches (id, batch_no, product_id, produced_on, shift, crates, mfg_date, expiry_date, water_log_id, notes, created_by)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)")
-        .bind(id).bind(&batch_no).bind(b.product_id).bind(produced_on).bind(shift).bind(b.crates as i32).bind(mfg).bind(expiry).bind(b.water_log_id).bind(&notes).bind(user.id)
+    sqlx::query("INSERT INTO production_batches (id, batch_no, product_id, produced_on, shift, crates, mfg_date, expiry_date, water_log_id, notes, created_by, location_id)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)")
+        .bind(id).bind(&batch_no).bind(b.product_id).bind(produced_on).bind(shift).bind(b.crates as i32).bind(mfg).bind(expiry).bind(b.water_log_id).bind(&notes).bind(user.id).bind(loc)
         .execute(&mut *tx).await?;
     let mut order: Vec<usize> = (0..reqs.len()).collect();
     order.sort_by(|a, c| (reqs[*a].item, reqs[*a].item_id, reqs[*a].zone).cmp(&(reqs[*c].item, reqs[*c].item_id, reqs[*c].zone)));
     let mut raw_ids = vec![];
     for i in order {
         let r = &reqs[i];
-        stock::consume_fefo(&mut tx, r.item, r.item_id, r.zone, r.required, "BATCH_CONSUME", Some("BATCH"), Some(id), Some(user.id), &batch_no).await?;
+        stock::consume_fefo_at(&mut tx, loc, r.item, r.item_id, r.zone, r.required, "BATCH_CONSUME", Some("BATCH"), Some(id), Some(user.id), &batch_no).await?;
         if !r.container {
             raw_ids.push(r.item_id);
             sqlx::query("INSERT INTO batch_material_usage (batch_id, raw_material_id, qty, zone) VALUES ($1,$2,$3,$4)")
                 .bind(id).bind(r.item_id).bind(r.required).bind(r.zone).execute(&mut *tx).await?;
         }
         for (_, wq, reason) in waste.iter().filter(|w| w.0 == i) {
-            stock::consume_fefo(&mut tx, r.item, r.item_id, r.zone, *wq, "BATCH_WASTE", Some("BATCH"), Some(id), Some(user.id), &format!("{batch_no} waste: {reason}")).await?;
+            stock::consume_fefo_at(&mut tx, loc, r.item, r.item_id, r.zone, *wq, "BATCH_WASTE", Some("BATCH"), Some(id), Some(user.id), &format!("{batch_no} waste: {reason}")).await?;
             sqlx::query("INSERT INTO batch_material_usage (batch_id, raw_material_id, qty, zone) VALUES ($1,$2,$3,$4)")
                 .bind(id).bind(r.item_id).bind(*wq).bind(r.zone).execute(&mut *tx).await?;
         }
     }
-    stock::post_all(&mut tx, vec![Move::new(ItemType::Product, b.product_id, "QC_QUARANTINE", id, Decimal::from(b.crates), "BATCH_OUTPUT")
+    stock::post_all(&mut tx, vec![Move::new(ItemType::Product, b.product_id, "QC_QUARANTINE", id, Decimal::from(b.crates), "BATCH_OUTPUT").at(loc)
         .reference("BATCH", id).by(Some(user.id)).note(batch_no.clone()).expiry(Some(expiry))]).await?;
     if dry { return finish_dry(tx, "BATCH", id, &warnings).await; }
     alerts::raise(&mut *tx, alerts::NewAlert {
@@ -272,32 +274,40 @@ pub async fn batch_detail(conn: &mut PgConnection, id: Uuid) -> AppResult<Value>
                   FROM qc_tests t LEFT JOIN users tu ON tu.id = t.tested_by WHERE t.batch_id = b.id), '[]'::jsonb),
             'sets_summary', (SELECT jsonb_build_object('count', count(*), 'allocated_crates', COALESCE(SUM(original_crates) FILTER (WHERE parent_set_id IS NULL), 0))
                   FROM qr_crate_sets WHERE batch_id = b.id),
-            'stock', COALESCE((SELECT jsonb_object_agg(sb.zone, sb.qty::text) FROM stock_balances sb
-                  WHERE sb.item_type='PRODUCT' AND sb.item_id=b.product_id AND sb.lot_id=b.id AND sb.qty > 0), '{}'::jsonb))
+            'stock', COALESCE((SELECT jsonb_object_agg(z.zone, z.q::text) FROM (SELECT sb.zone, SUM(sb.qty) AS q FROM stock_balances sb
+                  WHERE sb.item_type='PRODUCT' AND sb.item_id=b.product_id AND sb.lot_id=b.id AND sb.qty > 0 GROUP BY sb.zone) z), '{}'::jsonb),
+            'stock_by_location', COALESCE((SELECT jsonb_agg(jsonb_build_object('location_id', sb.location_id, 'location_name', lo.name, 'zone', sb.zone, 'qty', sb.qty::text) ORDER BY lo.name, sb.zone)
+                  FROM stock_balances sb JOIN locations lo ON lo.id = sb.location_id
+                  WHERE sb.item_type='PRODUCT' AND sb.item_id=b.product_id AND sb.lot_id=b.id AND sb.qty > 0), '[]'::jsonb))
          FROM production_batches b JOIN products p ON p.id = b.product_id LEFT JOIN users du ON du.id = b.qc_decided_by LEFT JOIN users cu ON cu.id = b.created_by
          WHERE b.id = $1"), &[Arg::U(Some(id))]).await;
     match v { Ok(v) if !v.is_null() => Ok(v), Ok(_) | Err(AppError::NotFound(_)) => Err(AppError::not_found("batch")), Err(e) => Err(e) }
 }
 
-pub async fn get(State(s): State<AppState>, Id(id): Id) -> AppResult<Json<Value>> {
+pub fn loc_of(v: &Value) -> Uuid { v["location_id"].as_str().and_then(|x| Uuid::parse_str(x).ok()).unwrap_or_default() }
+
+pub async fn get(State(s): State<AppState>, user: AuthUser, Id(id): Id) -> AppResult<Json<Value>> {
     let mut c = s.db.acquire().await?;
-    Ok(Json(batch_detail(&mut c, id).await?))
+    let v = batch_detail(&mut c, id).await?;
+    user.require_location(loc_of(&v))?;
+    Ok(Json(v))
 }
 
 #[derive(Deserialize, Default)]
-pub struct ListQ { qc_status: Option<String>, product_id: Option<Uuid>, from: Option<NaiveDate>, to: Option<NaiveDate>, q: Option<String>, format: Option<String>,
+pub struct ListQ { location_id: Option<String>, qc_status: Option<String>, product_id: Option<Uuid>, from: Option<NaiveDate>, to: Option<NaiveDate>, q: Option<String>, format: Option<String>,
                    limit: Option<i64>, offset: Option<i64> }
 
-pub async fn list(State(s): State<AppState>, Q(q): Q<ListQ>) -> AppResult<Response> {
+pub async fn list(State(s): State<AppState>, user: AuthUser, Q(q): Q<ListQ>) -> AppResult<Response> {
+    let locs = { let mut c = s.db.acquire().await?; bh::list_scope(&mut c, &user, &q.location_id).await? };
     if let Some(st) = &q.qc_status { if !["QUARANTINE", "APPROVED", "REJECTED"].contains(&st.as_str()) { return Err(AppError::field("qc_status", "unknown status")); } }
     let csv = bh::is_csv(&q.format);
     let pq = validate::PageQuery { limit: q.limit, offset: q.offset };
     let (limit, offset) = if csv { (bh::CSV_MAX_ROWS, 0) } else { (pq.limit(), pq.offset()) };
     let v = bh::paged(&s.db,
         concat!("SELECT ", batch_j!(), " AS j, b.created_at AS ca, b.id AS bid FROM production_batches b JOIN products p ON p.id = b.product_id
-         WHERE ($1::text IS NULL OR b.qc_status = $1) AND ($2::uuid IS NULL OR b.product_id = $2) AND ($3::date IS NULL OR b.produced_on >= $3)
+         WHERE b.location_id = ANY($6) AND ($1::text IS NULL OR b.qc_status = $1) AND ($2::uuid IS NULL OR b.product_id = $2) AND ($3::date IS NULL OR b.produced_on >= $3)
            AND ($4::date IS NULL OR b.produced_on <= $4) AND ($5::text IS NULL OR b.batch_no ILIKE $5 OR p.name ILIKE $5)"),
-        "ca DESC, bid", &[Arg::t(&q.qc_status), Arg::U(q.product_id), Arg::D(q.from), Arg::D(q.to), Arg::like(&q.q)], limit, offset).await?;
+        "ca DESC, bid", &[Arg::t(&q.qc_status), Arg::U(q.product_id), Arg::D(q.from), Arg::D(q.to), Arg::like(&q.q), Arg::UA(locs)], limit, offset).await?;
     if csv {
         return Ok(bh::csv_response("batches.csv", &[("Batch", "batch_no"), ("Product", "product_name"), ("Crates", "crates"), ("QC status", "qc_status"),
             ("Produced on", "produced_on"), ("Mfg date", "mfg_date"), ("Expiry", "expiry_date"), ("Shift", "shift"), ("Created", "created_at")], bh::items_of(&v)));
@@ -308,9 +318,10 @@ pub async fn list(State(s): State<AppState>, Q(q): Q<ListQ>) -> AppResult<Respon
 // ------------------------------------------------------------------------------------------------------------------
 // Traceability / recall view
 // ------------------------------------------------------------------------------------------------------------------
-pub async fn trace(State(s): State<AppState>, Id(id): Id) -> AppResult<Json<Value>> {
+pub async fn trace(State(s): State<AppState>, user: AuthUser, Id(id): Id) -> AppResult<Json<Value>> {
     let mut c = s.db.acquire().await?;
     let batch = batch_detail(&mut c, id).await?;
+    user.require_location(loc_of(&batch))?;
     let a = [Arg::U(Some(id))];
     let materials = bh::jval(&mut *c,
         "SELECT COALESCE(jsonb_agg(jsonb_build_object('item_type', l.item_type, 'raw_material_id', CASE WHEN l.item_type='RAW' THEN l.item_id END, 'name', COALESCE(m.name, pr.name),
@@ -350,33 +361,34 @@ pub async fn trace(State(s): State<AppState>, Id(id): Id) -> AppResult<Json<Valu
 // Production summary
 // ------------------------------------------------------------------------------------------------------------------
 #[derive(Deserialize, Default)]
-pub struct SumQ { from: Option<NaiveDate>, to: Option<NaiveDate> }
+pub struct SumQ { location_id: Option<String>, from: Option<NaiveDate>, to: Option<NaiveDate> }
 
-pub async fn summary(State(s): State<AppState>, Q(q): Q<SumQ>) -> AppResult<Json<Value>> {
+pub async fn summary(State(s): State<AppState>, user: AuthUser, Q(q): Q<SumQ>) -> AppResult<Json<Value>> {
     let mut c = s.db.acquire().await?;
+    let locs = bh::list_scope(&mut c, &user, &q.location_id).await?;
     let today = util::plant_today(&mut c).await?;
     let to = q.to.unwrap_or(today);
     let from = q.from.unwrap_or(to - chrono::Duration::days(29));
     if from > to { return Err(AppError::field("from", "must not be after 'to'")); }
     if (to - from).num_days() > 366 { return Err(AppError::field("from", "range is limited to 366 days")); }
-    let a = [Arg::D(Some(from)), Arg::D(Some(to))];
+    let a = [Arg::D(Some(from)), Arg::D(Some(to)), Arg::UA(locs)];
     let days = bh::jval(&mut *c,
         "SELECT COALESCE(jsonb_agg(jsonb_build_object('date', d, 'batches', COALESCE(bt.n,0), 'crates', COALESCE(bt.crates,0), 'bottles', COALESCE(bt.bottles,0),
             'blow_good', COALESCE(bl.good,0)::text, 'blow_scrap', COALESCE(bl.scrap,0)::text,
             'scrap_pct', CASE WHEN COALESCE(bl.good,0)+COALESCE(bl.scrap,0) > 0 THEN round(bl.scrap * 100 / (bl.good+bl.scrap), 2)::text ELSE '0' END) ORDER BY d), '[]'::jsonb)
          FROM (SELECT d::date AS d FROM generate_series($1::date, $2::date, interval '1 day') d) days
          LEFT JOIN (SELECT b.produced_on AS pd, count(*) AS n, SUM(b.crates) AS crates, SUM(b.crates * p.units_per_crate) AS bottles
-                    FROM production_batches b JOIN products p ON p.id=b.product_id WHERE b.produced_on BETWEEN $1 AND $2 GROUP BY b.produced_on) bt ON bt.pd = days.d
-         LEFT JOIN (SELECT run_date AS rd, SUM(good_bottles) AS good, SUM(scrap_pcs) AS scrap FROM blow_molding_runs WHERE run_date BETWEEN $1 AND $2 GROUP BY run_date) bl ON bl.rd = days.d
+                    FROM production_batches b JOIN products p ON p.id=b.product_id WHERE b.produced_on BETWEEN $1 AND $2 AND b.location_id = ANY($3) GROUP BY b.produced_on) bt ON bt.pd = days.d
+         LEFT JOIN (SELECT run_date AS rd, SUM(good_bottles) AS good, SUM(scrap_pcs) AS scrap FROM blow_molding_runs WHERE run_date BETWEEN $1 AND $2 AND location_id = ANY($3) GROUP BY run_date) bl ON bl.rd = days.d
          WHERE bt.pd IS NOT NULL OR bl.rd IS NOT NULL", &a).await?;
     let by_product = bh::jval(&mut *c,
         "SELECT COALESCE(jsonb_agg(jsonb_build_object('product_id', x.pid, 'name', x.name, 'batches', x.n, 'crates', x.crates, 'bottles', x.bottles) ORDER BY x.name), '[]'::jsonb)
          FROM (SELECT p.id AS pid, p.name, count(*) AS n, SUM(b.crates) AS crates, SUM(b.crates * p.units_per_crate) AS bottles
-               FROM production_batches b JOIN products p ON p.id=b.product_id WHERE b.produced_on BETWEEN $1 AND $2 GROUP BY p.id, p.name) x", &a).await?;
+               FROM production_batches b JOIN products p ON p.id=b.product_id WHERE b.produced_on BETWEEN $1 AND $2 AND b.location_id = ANY($3) GROUP BY p.id, p.name) x", &a).await?;
     let usage = bh::jval(&mut *c,
         "SELECT COALESCE(jsonb_agg(jsonb_build_object('raw_material_id', x.rid, 'name', x.name, 'unit', x.unit, 'qty', x.qty::text) ORDER BY x.name), '[]'::jsonb)
          FROM (SELECT m.id AS rid, m.name, m.stock_unit AS unit, SUM(u.qty) AS qty FROM batch_material_usage u JOIN production_batches b ON b.id=u.batch_id
-               JOIN raw_materials m ON m.id=u.raw_material_id WHERE b.produced_on BETWEEN $1 AND $2 GROUP BY m.id, m.name, m.stock_unit) x", &a).await?;
+               JOIN raw_materials m ON m.id=u.raw_material_id WHERE b.produced_on BETWEEN $1 AND $2 AND b.location_id = ANY($3) GROUP BY m.id, m.name, m.stock_unit) x", &a).await?;
     Ok(Json(json!({ "from": from, "to": to, "days": days, "by_product": by_product, "material_usage": usage })))
 }
 

@@ -1,5 +1,5 @@
 //! `/api/ref/*` – read-only reference data for dropdowns (any logged-in user). Active rows only, bounded to 500 rows.
-use crate::{error::AppResult, state::AppState, stock};
+use crate::{auth::AuthUser, error::AppResult, state::AppState, stock};
 use axum::{extract::State, routing::get, Json, Router};
 use serde_json::{json, Value};
 
@@ -15,6 +15,7 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles", get(vehicles))
         .route("/routes", get(routes))
         .route("/equipment", get(equipment))
+        .route("/locations", get(locations))
         .route("/zones", get(zones))
         .route("/settings", get(settings))
 }
@@ -77,4 +78,15 @@ async fn settings(State(s): State<AppState>) -> Json<Value> {
         "damage_warn_pct": c.damage_warn_pct, "jar_destroy_warn_pct": c.jar_destroy_warn_pct,
         "ph_min": c.ph_min.to_string(), "ph_max": c.ph_max.to_string(), "tds_min": c.tds_min.to_string(), "tds_max": c.tds_max.to_string(),
     }))
+}
+
+/// Active selectable godowns the caller may use (TRANSIT is a system location and never listed).
+async fn locations(State(s): State<AppState>, user: AuthUser) -> AppResult<Json<Value>> {
+    let mut c = s.db.acquire().await?;
+    let allowed = bh::allowed_locations(&mut c, &user).await?;
+    Ok(Json(jval(&mut *c,
+        "SELECT COALESCE(jsonb_agg(j ORDER BY n), '[]'::jsonb) FROM (
+           SELECT jsonb_build_object('id', l.id, 'code', l.code, 'name', l.name, 'kind', l.kind, 'address', l.address, 'city', l.city,
+                  'contact_person', l.contact_person, 'phone', l.phone, 'is_production_site', l.is_production_site, 'is_active', l.is_active) AS j, l.name AS n
+           FROM locations l WHERE l.is_active AND l.kind <> 'TRANSIT' AND l.id = ANY($1) ORDER BY l.name LIMIT 500) t", &[bh::Arg::UA(allowed)]).await?))
 }

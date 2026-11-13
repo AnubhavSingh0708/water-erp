@@ -83,17 +83,17 @@ async fn check_lot(tx: &mut PgConnection, c: &ItemCtx, zone: &str, lot: Uuid, po
 }
 
 /// For a PRODUCT lot in FG_READY: lock the batch row (same row loaders lock) and return the crates reserved by open loading trips.
-async fn lock_reserved(tx: &mut PgConnection, c: &ItemCtx, zone: &str, lot: Uuid) -> AppResult<Decimal> {
+async fn lock_reserved(tx: &mut PgConnection, loc: Uuid, c: &ItemCtx, zone: &str, lot: Uuid) -> AppResult<Decimal> {
     if c.kind == ItemKind::Product && zone == "FG_READY" && !lot.is_nil() {
         sqlx::query("SELECT id FROM production_batches WHERE id=$1 FOR UPDATE").bind(lot).execute(&mut *tx).await?;
-        return stock::fg_reserved(tx, lot).await;
+        return stock::fg_reserved_at(tx, loc, lot).await;
     }
     Ok(Decimal::ZERO)
 }
 
-async fn balance_locked(tx: &mut PgConnection, c: &ItemCtx, zone: &str, lot: Uuid) -> AppResult<Decimal> {
-    Ok(sqlx::query_scalar("SELECT COALESCE((SELECT qty FROM stock_balances WHERE item_type=$1 AND item_id=$2 AND zone=$3 AND lot_id=$4 FOR UPDATE), 0)")
-        .bind(c.kind.it().as_str()).bind(c.id).bind(zone).bind(lot).fetch_one(&mut *tx).await?)
+async fn balance_locked(tx: &mut PgConnection, loc: Uuid, c: &ItemCtx, zone: &str, lot: Uuid) -> AppResult<Decimal> {
+    Ok(sqlx::query_scalar("SELECT COALESCE((SELECT qty FROM stock_balances WHERE item_type=$1 AND item_id=$2 AND zone=$3 AND lot_id=$4 AND location_id=$5 FOR UPDATE), 0)")
+        .bind(c.kind.it().as_str()).bind(c.id).bind(zone).bind(lot).bind(loc).fetch_one(&mut *tx).await?)
 }
 
 fn is_large(cur: Decimal, delta_abs: Decimal, pct: i64) -> bool {
@@ -106,13 +106,13 @@ fn insufficient(c: &ItemCtx, zone: &str, lot: Uuid, have: Decimal, need: Decimal
 }
 
 /// Containers leaving the fleet through a warehouse flow need a DESTROYED event (API §0.2-E).
-async fn fleet_destroyed(tx: &mut PgConnection, c: &ItemCtx, from_zone: &str, qty: Decimal, reason: &str, note: &str, user: &AuthUser) -> AppResult<()> {
+async fn fleet_destroyed(tx: &mut PgConnection, loc: Uuid, c: &ItemCtx, from_zone: &str, qty: Decimal, reason: &str, note: &str, user: &AuthUser) -> AppResult<()> {
     if !c.returnable || from_zone == "SCRAP_YARD" { return Ok(()); }
     let fleet_reason = match reason { "BREAKAGE" => "CRACKED", "EXPIRED" => "AGE_RETIRED", "CONTAMINATED" => "WASH_REJECT", "THEFT_LOSS" => "LOST", "TRANSIT_DAMAGE" => "DAMAGED_RETURN", _ => "OTHER" };
-    let loc = if from_zone == "JAR_EMPTY" { "PLANT_EMPTY" } else { "PLANT_CLEAN" };
+    let fleet_loc = if from_zone == "JAR_EMPTY" { "PLANT_EMPTY" } else { "PLANT_CLEAN" };
     let q = qty.trunc().to_string().parse::<i32>().map_err(|_| AppError::bad("quantity out of range"))?;
-    sqlx::query("INSERT INTO jar_fleet_events (product_id, event_type, qty, reason_code, location, note, created_by) VALUES ($1,'DESTROYED',$2,$3,$4,$5,$6)")
-        .bind(c.id).bind(q).bind(fleet_reason).bind(loc).bind(note).bind(user.id).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO jar_fleet_events (product_id, event_type, qty, reason_code, location, note, created_by, location_id) VALUES ($1,'DESTROYED',$2,$3,$4,$5,$6,$7)")
+        .bind(c.id).bind(q).bind(fleet_reason).bind(fleet_loc).bind(note).bind(user.id).bind(loc).execute(&mut *tx).await?;
     Ok(())
 }
 
@@ -124,7 +124,7 @@ const ADJ_CODES: &[&str] = &["COUNT_CORRECTION", "ENTRY_ERROR", "FOUND", "DAMAGE
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AdjReq {
-    item_type: ItemKind, item_id: Uuid, zone: String, lot_id: Option<Uuid>, delta: D, reason: String, reason_code: Option<String>,
+    location_id: Option<Uuid>, item_type: ItemKind, item_id: Uuid, zone: String, lot_id: Option<Uuid>, delta: D, reason: String, reason_code: Option<String>,
     #[serde(default)] confirm: bool,
 }
 
@@ -144,12 +144,13 @@ pub async fn adjust(State(s): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>, J
     let lot = b.lot_id.unwrap_or(stock::NIL_LOT);
     let pct = s.settings.get().large_adjust_pct;
     let mut tx = s.db.begin().await?;
+    let loc = bh::write_location(&mut tx, &user, b.location_id).await?;
     let ctx = load_item(&mut tx, b.item_type, b.item_id).await?;
     zone_allowed(&ctx, zone)?;
     whole_if_product(&ctx, "delta", delta)?;
     let expiry = check_lot(&mut tx, &ctx, zone, lot, delta > Decimal::ZERO).await?;
-    let reserved = lock_reserved(&mut tx, &ctx, zone, lot).await?;
-    let cur = balance_locked(&mut tx, &ctx, zone, lot).await?;
+    let reserved = lock_reserved(&mut tx, loc, &ctx, zone, lot).await?;
+    let cur = balance_locked(&mut tx, loc, &ctx, zone, lot).await?;
     if cur + delta < Decimal::ZERO { return Err(insufficient(&ctx, zone, lot, cur, -delta)); }
     let mut warnings = vec![];
     if is_large(cur, delta.abs(), pct) {
@@ -161,13 +162,13 @@ pub async fn adjust(State(s): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>, J
     bh::need_confirm(&warnings, b.confirm, dry, "This adjustment looks unusual")?;
     let id = Uuid::new_v4();
     let note = match code { Some(c) => format!("[{c}] {reason}"), None => reason.clone() };
-    let after = stock::post(&mut tx, &Move::new(ctx.kind.it(), ctx.id, zone, lot, delta, "ADJUST").reference("ADJUSTMENT", id).by(Some(user.id)).note(note).expiry(expiry), Uuid::new_v4()).await?;
+    let after = stock::post(&mut tx, &Move::new(ctx.kind.it(), ctx.id, zone, lot, delta, "ADJUST").at(loc).reference("ADJUSTMENT", id).by(Some(user.id)).note(note).expiry(expiry), Uuid::new_v4()).await?;
     if dry { return finish_dry(tx, "ADJUSTMENT", id, &warnings).await; }
     audit::log(&mut *tx, Some(&user), "STOCK_ADJUST", "stock", Some(id.to_string()),
-        json!({ "item_type": ctx.kind.it().as_str(), "item_id": ctx.id, "item": ctx.name, "zone": zone, "lot_id": lot, "delta": delta.to_string(), "reason": reason, "reason_code": code })).await;
+        json!({ "location_id": loc, "item_type": ctx.kind.it().as_str(), "item_id": ctx.id, "item": ctx.name, "zone": zone, "lot_id": lot, "delta": delta.to_string(), "reason": reason, "reason_code": code })).await;
     let effects = bh::effects_by_ref(&mut tx, "ADJUSTMENT", id).await?;
     tx.commit().await?;
-    created(json!({ "id": id, "item_type": ctx.kind.it().as_str(), "item_id": ctx.id, "item": ctx.name, "zone": zone, "lot_id": lot, "delta": delta.to_string(),
+    created(json!({ "id": id, "location_id": loc, "item_type": ctx.kind.it().as_str(), "item_id": ctx.id, "item": ctx.name, "zone": zone, "lot_id": lot, "delta": delta.to_string(),
         "balance_after": after.to_string(), "reason": reason, "effects": effects, "warnings": warnings }))
 }
 
@@ -177,7 +178,7 @@ pub async fn adjust(State(s): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>, J
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TransferReq {
-    item_type: ItemKind, item_id: Uuid, lot_id: Option<Uuid>, from_zone: String, to_zone: String, qty: D, note: Option<String>,
+    location_id: Option<Uuid>, item_type: ItemKind, item_id: Uuid, lot_id: Option<Uuid>, from_zone: String, to_zone: String, qty: D, note: Option<String>,
     #[serde(default)] confirm: bool,
 }
 
@@ -199,26 +200,27 @@ pub async fn transfer(State(s): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>,
     let lot = b.lot_id.unwrap_or(stock::NIL_LOT);
     let pct = s.settings.get().large_adjust_pct;
     let mut tx = s.db.begin().await?;
+    let loc = bh::write_location(&mut tx, &user, b.location_id).await?;
     let ctx = load_item(&mut tx, b.item_type, b.item_id).await?;
     zone_allowed(&ctx, from)?;
     whole_if_product(&ctx, "qty", qty)?;
     check_lot(&mut tx, &ctx, from, lot, false).await?;
-    let reserved = lock_reserved(&mut tx, &ctx, from, lot).await?;
-    let cur = balance_locked(&mut tx, &ctx, from, lot).await?;
+    let reserved = lock_reserved(&mut tx, loc, &ctx, from, lot).await?;
+    let cur = balance_locked(&mut tx, loc, &ctx, from, lot).await?;
     if cur < qty { return Err(insufficient(&ctx, from, lot, cur, qty)); }
     let mut warnings = vec![];
     if is_large(cur, qty, pct) { warnings.push(format!("Moving {} of {} is a large share of the balance {} (limit {pct}% or 1000 units)", qty.normalize(), ctx.name, cur.normalize())); }
     if reserved > Decimal::ZERO && cur - qty < reserved { warnings.push(format!("{} crates are reserved by open loading trips; their gate pass will fail", reserved.normalize())); }
     bh::need_confirm(&warnings, b.confirm, dry, "This transfer looks unusual")?;
     let id = Uuid::new_v4();
-    stock::transfer(&mut tx, ctx.kind.it(), ctx.id, lot, from, to, qty, "TRANSFER", Some("TRANSFER"), Some(id), Some(user.id), &note).await?;
-    if to_scrap { fleet_destroyed(&mut tx, &ctx, from, qty, "OTHER", &note, &user).await?; }
+    stock::transfer_between(&mut tx, ctx.kind.it(), ctx.id, lot, loc, from, loc, to, qty, "TRANSFER", Some("TRANSFER"), Some(id), Some(user.id), &note).await?;
+    if to_scrap { fleet_destroyed(&mut tx, loc, &ctx, from, qty, "OTHER", &note, &user).await?; }
     if dry { return finish_dry(tx, "TRANSFER", id, &warnings).await; }
     audit::log(&mut *tx, Some(&user), "STOCK_TRANSFER", "stock", Some(id.to_string()),
         json!({ "item_type": ctx.kind.it().as_str(), "item_id": ctx.id, "item": ctx.name, "lot_id": lot, "from": from, "to": to, "qty": qty.to_string(), "note": note })).await;
     let effects = bh::effects_by_ref(&mut tx, "TRANSFER", id).await?;
     tx.commit().await?;
-    created(json!({ "id": id, "item": ctx.name, "from_zone": from, "to_zone": to, "qty": qty.to_string(), "effects": effects, "warnings": warnings }))
+    created(json!({ "id": id, "location_id": loc, "item": ctx.name, "from_zone": from, "to_zone": to, "qty": qty.to_string(), "effects": effects, "warnings": warnings }))
 }
 
 // ------------------------------------------------------------------------------------------------------------------
@@ -229,16 +231,16 @@ const WO_REASONS: &[&str] = &["BREAKAGE", "EXPIRED", "CONTAMINATED", "SPILLAGE",
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WoReq {
-    item_type: ItemKind, item_id: Uuid, zone: String, lot_id: Option<Uuid>, qty: D, reason_code: String, note: String,
+    location_id: Option<Uuid>, item_type: ItemKind, item_id: Uuid, zone: String, lot_id: Option<Uuid>, qty: D, reason_code: String, note: String,
     #[serde(default)] confirm: bool, dispose: Option<bool>,
 }
 
 async fn wo_one(conn: &mut PgConnection, id: Uuid) -> AppResult<Value> {
     let v = bh::jval(&mut *conn,
-        "SELECT jsonb_build_object('id', w.id, 'wo_no', w.wo_no, 'item_type', w.item_type, 'item_id', w.item_id, 'item_name', COALESCE(m.name, p.name), 'item_code', COALESCE(m.code, p.code),
+        "SELECT jsonb_build_object('id', w.id, 'wo_no', w.wo_no, 'location_id', w.location_id, 'location_name', lo.name, 'item_type', w.item_type, 'item_id', w.item_id, 'item_name', COALESCE(m.name, p.name), 'item_code', COALESCE(m.code, p.code),
             'unit', CASE WHEN w.item_type='RAW' THEN m.stock_unit ELSE 'crates' END, 'zone', w.zone, 'lot_id', w.lot_id, 'lot_label', COALESCE(gl.lot_no, b.batch_no),
             'qty', w.qty::text, 'reason_code', w.reason_code, 'note', w.note, 'disposed', w.disposed, 'created_at', w.created_at, 'created_by_name', u.full_name)
-         FROM stock_write_offs w LEFT JOIN raw_materials m ON w.item_type='RAW' AND m.id = w.item_id LEFT JOIN products p ON w.item_type='PRODUCT' AND p.id = w.item_id
+         FROM stock_write_offs w JOIN locations lo ON lo.id = w.location_id LEFT JOIN raw_materials m ON w.item_type='RAW' AND m.id = w.item_id LEFT JOIN products p ON w.item_type='PRODUCT' AND p.id = w.item_id
          LEFT JOIN grn_lines gl ON w.item_type='RAW' AND gl.id = w.lot_id LEFT JOIN production_batches b ON w.item_type='PRODUCT' AND b.id = w.lot_id
          LEFT JOIN users u ON u.id = w.created_by WHERE w.id = $1", &[Arg::U(Some(id))]).await;
     match v { Ok(v) if !v.is_null() => Ok(v), Ok(_) | Err(AppError::NotFound(_)) => Err(AppError::not_found("write-off")), Err(e) => Err(e) }
@@ -257,12 +259,13 @@ pub async fn wo_create(State(s): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>
     let from_scrap = zone == "SCRAP_YARD";
     let dispose = b.dispose.unwrap_or(false) || from_scrap;
     let mut tx = s.db.begin().await?;
+    let loc = bh::write_location(&mut tx, &user, b.location_id).await?;
     let ctx = load_item(&mut tx, b.item_type, b.item_id).await?;
     zone_allowed(&ctx, zone)?;
     whole_if_product(&ctx, "qty", qty)?;
     check_lot(&mut tx, &ctx, zone, lot, false).await?;
-    let reserved = lock_reserved(&mut tx, &ctx, zone, lot).await?;
-    let cur = balance_locked(&mut tx, &ctx, zone, lot).await?;
+    let reserved = lock_reserved(&mut tx, loc, &ctx, zone, lot).await?;
+    let cur = balance_locked(&mut tx, loc, &ctx, zone, lot).await?;
     if cur < qty { return Err(insufficient(&ctx, zone, lot, cur, qty)); }
     let mut warnings = vec![format!("{} {} of {} will be {} ({}). This cannot be undone.", qty.normalize(), if ctx.kind == ItemKind::Product { "crates" } else { "units" }, ctx.name,
         if dispose { "written off and removed from the books" } else { "written off to the scrap yard" }, b.reason_code)];
@@ -270,16 +273,16 @@ pub async fn wo_create(State(s): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>
     bh::need_confirm(&warnings, b.confirm, dry, "Write-offs are irreversible - please confirm")?;
     let id = Uuid::new_v4();
     let wo_no = bh::doc_no(&mut tx, "wo_seq", "WO", dry).await?;
-    sqlx::query("INSERT INTO stock_write_offs (id, wo_no, item_type, item_id, zone, lot_id, qty, reason_code, note, disposed, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)")
-        .bind(id).bind(&wo_no).bind(ctx.kind.it().as_str()).bind(ctx.id).bind(zone).bind(lot).bind(qty).bind(&b.reason_code).bind(&note).bind(dispose).bind(user.id)
+    sqlx::query("INSERT INTO stock_write_offs (id, wo_no, item_type, item_id, zone, lot_id, qty, reason_code, note, disposed, created_by, location_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)")
+        .bind(id).bind(&wo_no).bind(ctx.kind.it().as_str()).bind(ctx.id).bind(zone).bind(lot).bind(qty).bind(&b.reason_code).bind(&note).bind(dispose).bind(user.id).bind(loc)
         .execute(&mut *tx).await?;
     let full_note = format!("{wo_no} {}: {note}", b.reason_code);
     if !from_scrap {
-        stock::transfer(&mut tx, ctx.kind.it(), ctx.id, lot, zone, "SCRAP_YARD", qty, "WRITE_OFF", Some("WRITE_OFF"), Some(id), Some(user.id), &full_note).await?;
-        fleet_destroyed(&mut tx, &ctx, zone, qty, &b.reason_code, &full_note, &user).await?;
+        stock::transfer_between(&mut tx, ctx.kind.it(), ctx.id, lot, loc, zone, loc, "SCRAP_YARD", qty, "WRITE_OFF", Some("WRITE_OFF"), Some(id), Some(user.id), &full_note).await?;
+        fleet_destroyed(&mut tx, loc, &ctx, zone, qty, &b.reason_code, &full_note, &user).await?;
     }
     if dispose {
-        stock::post_all(&mut tx, vec![Move::new(ctx.kind.it(), ctx.id, "SCRAP_YARD", lot, -qty, "DISPOSE").reference("WRITE_OFF", id).by(Some(user.id)).note(full_note.clone())]).await?;
+        stock::post_all(&mut tx, vec![Move::new(ctx.kind.it(), ctx.id, "SCRAP_YARD", lot, -qty, "DISPOSE").at(loc).reference("WRITE_OFF", id).by(Some(user.id)).note(full_note.clone())]).await?;
     }
     if dry { return finish_dry(tx, "WRITE_OFF", id, &warnings).await; }
     audit::log(&mut *tx, Some(&user), "WRITE_OFF", "stock_write_off", Some(id.to_string()),
@@ -292,22 +295,23 @@ pub async fn wo_create(State(s): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>
 }
 
 #[derive(Deserialize, Default)]
-pub struct WoListQ { reason: Option<String>, from: Option<NaiveDate>, to: Option<NaiveDate>, format: Option<String>, limit: Option<i64>, offset: Option<i64> }
+pub struct WoListQ { location_id: Option<String>, reason: Option<String>, from: Option<NaiveDate>, to: Option<NaiveDate>, format: Option<String>, limit: Option<i64>, offset: Option<i64> }
 
-pub async fn wo_list(State(s): State<AppState>, Q(q): Q<WoListQ>) -> AppResult<Response> {
+pub async fn wo_list(State(s): State<AppState>, user: AuthUser, Q(q): Q<WoListQ>) -> AppResult<Response> {
+    let locs = { let mut c = s.db.acquire().await?; bh::list_scope(&mut c, &user, &q.location_id).await? };
     if let Some(r) = &q.reason { if !WO_REASONS.contains(&r.as_str()) { return Err(AppError::field("reason", "unknown reason code")); } }
     let csv = bh::is_csv(&q.format);
     let pq = validate::PageQuery { limit: q.limit, offset: q.offset };
     let (limit, offset) = if csv { (bh::CSV_MAX_ROWS, 0) } else { (pq.limit(), pq.offset()) };
     let off = s.settings.get().utc_offset_minutes;
     let v = bh::paged(&s.db,
-        concat!("SELECT jsonb_build_object('id', w.id, 'wo_no', w.wo_no, 'item_type', w.item_type, 'item_id', w.item_id, 'item_name', COALESCE(m.name, p.name), 'zone', w.zone,
+        concat!("SELECT jsonb_build_object('id', w.id, 'wo_no', w.wo_no, 'location_id', w.location_id, 'location_name', lo.name, 'item_type', w.item_type, 'item_id', w.item_id, 'item_name', COALESCE(m.name, p.name), 'zone', w.zone,
                   'lot_id', w.lot_id, 'qty', w.qty::text, 'reason_code', w.reason_code, 'note', w.note, 'disposed', w.disposed, 'created_at', w.created_at, 'created_by_name', u.full_name) AS j,
                   w.created_at AS ca, w.id AS wid
-           FROM stock_write_offs w LEFT JOIN raw_materials m ON w.item_type='RAW' AND m.id = w.item_id LEFT JOIN products p ON w.item_type='PRODUCT' AND p.id = w.item_id
+           FROM stock_write_offs w JOIN locations lo ON lo.id = w.location_id LEFT JOIN raw_materials m ON w.item_type='RAW' AND m.id = w.item_id LEFT JOIN products p ON w.item_type='PRODUCT' AND p.id = w.item_id
            LEFT JOIN users u ON u.id = w.created_by
-           WHERE ($1::text IS NULL OR w.reason_code = $1) AND ($2::date IS NULL OR ", local_date!("w.created_at", "$4"), " >= $2) AND ($3::date IS NULL OR ", local_date!("w.created_at", "$4"), " <= $3)"),
-        "ca DESC, wid", &[Arg::t(&q.reason), Arg::D(q.from), Arg::D(q.to), Arg::I(off)], limit, offset).await?;
+           WHERE w.location_id = ANY($5) AND ($1::text IS NULL OR w.reason_code = $1) AND ($2::date IS NULL OR ", local_date!("w.created_at", "$4"), " >= $2) AND ($3::date IS NULL OR ", local_date!("w.created_at", "$4"), " <= $3)"),
+        "ca DESC, wid", &[Arg::t(&q.reason), Arg::D(q.from), Arg::D(q.to), Arg::I(off), Arg::UA(locs)], limit, offset).await?;
     if csv {
         return Ok(bh::csv_response("write-offs.csv", &[("Write-off", "wo_no"), ("Date", "created_at"), ("Item", "item_name"), ("Zone", "zone"), ("Quantity", "qty"),
             ("Reason", "reason_code"), ("Note", "note"), ("Disposed", "disposed"), ("By", "created_by_name")], bh::items_of(&v)));
@@ -315,9 +319,13 @@ pub async fn wo_list(State(s): State<AppState>, Q(q): Q<WoListQ>) -> AppResult<R
     Ok(bh::json_resp(v))
 }
 
-pub async fn wo_get(State(s): State<AppState>, Id(id): Id) -> AppResult<Json<Value>> {
+fn loc_of(v: &Value) -> Uuid { v["location_id"].as_str().and_then(|x| Uuid::parse_str(x).ok()).unwrap_or_default() }
+
+pub async fn wo_get(State(s): State<AppState>, user: AuthUser, Id(id): Id) -> AppResult<Json<Value>> {
     let mut c = s.db.acquire().await?;
-    Ok(Json(wo_one(&mut c, id).await?))
+    let v = wo_one(&mut c, id).await?;
+    user.require_location(loc_of(&v))?;
+    Ok(Json(v))
 }
 
 // ------------------------------------------------------------------------------------------------------------------
@@ -325,11 +333,11 @@ pub async fn wo_get(State(s): State<AppState>, Id(id): Id) -> AppResult<Json<Val
 // ------------------------------------------------------------------------------------------------------------------
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CountReq { zone: String, note: Option<String> }
+pub struct CountReq { location_id: Option<Uuid>, zone: String, note: Option<String> }
 
 async fn count_one(conn: &mut PgConnection, id: Uuid) -> AppResult<Value> {
     let v = bh::jval(&mut *conn,
-        "SELECT jsonb_build_object('id', c.id, 'cnt_no', c.cnt_no, 'zone', c.zone, 'status', c.status, 'note', c.note, 'created_at', c.created_at, 'created_by_name', u.full_name,
+        "SELECT jsonb_build_object('id', c.id, 'cnt_no', c.cnt_no, 'location_id', c.location_id, 'location_name', lo.name, 'zone', c.zone, 'status', c.status, 'note', c.note, 'created_at', c.created_at, 'created_by_name', u.full_name,
             'posted_at', c.posted_at, 'posted_by_name', pu.full_name,
             'total_lines', (SELECT count(*) FROM stock_count_lines WHERE count_id = c.id), 'counted_lines', (SELECT count(*) FROM stock_count_lines WHERE count_id = c.id AND counted_qty IS NOT NULL),
             'lines', COALESCE((SELECT jsonb_agg(jsonb_build_object('line_id', l.id, 'item_type', l.item_type, 'item_id', l.item_id, 'name', COALESCE(m.name, p.name), 'code', COALESCE(m.code, p.code),
@@ -340,7 +348,7 @@ async fn count_one(conn: &mut PgConnection, id: Uuid) -> AppResult<Value> {
                FROM stock_count_lines l LEFT JOIN raw_materials m ON l.item_type='RAW' AND m.id = l.item_id LEFT JOIN products p ON l.item_type='PRODUCT' AND p.id = l.item_id
                LEFT JOIN grn_lines gl ON l.item_type='RAW' AND gl.id = l.lot_id LEFT JOIN production_batches b ON l.item_type='PRODUCT' AND b.id = l.lot_id
                WHERE l.count_id = c.id), '[]'::jsonb))
-         FROM stock_counts c LEFT JOIN users u ON u.id = c.created_by LEFT JOIN users pu ON pu.id = c.posted_by WHERE c.id = $1", &[Arg::U(Some(id))]).await;
+         FROM stock_counts c JOIN locations lo ON lo.id = c.location_id LEFT JOIN users u ON u.id = c.created_by LEFT JOIN users pu ON pu.id = c.posted_by WHERE c.id = $1", &[Arg::U(Some(id))]).await;
     match v { Ok(v) if !v.is_null() => Ok(v), Ok(_) | Err(AppError::NotFound(_)) => Err(AppError::not_found("count")), Err(e) => Err(e) }
 }
 
@@ -349,13 +357,14 @@ pub async fn count_create(State(s): State<AppState>, user: AuthUser, J(b): J<Cou
     no_quarantine(zone)?;
     let note = bh::opt_text("note", &b.note, 500)?;
     let mut tx = s.db.begin().await?;
+    let loc = bh::write_location(&mut tx, &user, b.location_id).await?;
     let id = Uuid::new_v4();
     let no = bh::doc_no(&mut tx, "cnt_seq", "CNT", false).await?;
-    sqlx::query("INSERT INTO stock_counts (id, cnt_no, zone, note, created_by) VALUES ($1,$2,$3,$4,$5)").bind(id).bind(&no).bind(zone).bind(&note).bind(user.id).execute(&mut *tx).await?;
-    let n = sqlx::query("INSERT INTO stock_count_lines (count_id, item_type, item_id, lot_id, expected_qty) SELECT $1, item_type, item_id, lot_id, qty FROM stock_balances WHERE zone=$2 AND qty > 0")
-        .bind(id).bind(zone).execute(&mut *tx).await?.rows_affected();
+    sqlx::query("INSERT INTO stock_counts (id, cnt_no, zone, note, created_by, location_id) VALUES ($1,$2,$3,$4,$5,$6)").bind(id).bind(&no).bind(zone).bind(&note).bind(user.id).bind(loc).execute(&mut *tx).await?;
+    let n = sqlx::query("INSERT INTO stock_count_lines (count_id, item_type, item_id, lot_id, expected_qty) SELECT $1, item_type, item_id, lot_id, qty FROM stock_balances WHERE zone=$2 AND location_id=$3 AND qty > 0")
+        .bind(id).bind(zone).bind(loc).execute(&mut *tx).await?.rows_affected();
     if n == 0 { return Err(AppError::bad("There is no stock in this zone to count")); }
-    audit::log(&mut *tx, Some(&user), "COUNT_CREATE", "stock_count", Some(id.to_string()), json!({ "cnt_no": no, "zone": zone, "lines": n })).await;
+    audit::log(&mut *tx, Some(&user), "COUNT_CREATE", "stock_count", Some(id.to_string()), json!({ "cnt_no": no, "zone": zone, "location_id": loc, "lines": n })).await;
     let v = count_one(&mut tx, id).await?;
     tx.commit().await?;
     created(v)
@@ -376,8 +385,9 @@ pub async fn count_lines(State(s): State<AppState>, user: AuthUser, Id(id): Id, 
         notes.push(bh::opt_text("note", &l.note, 300)?);
     }
     let mut tx = s.db.begin().await?;
-    let st: Option<String> = sqlx::query_scalar("SELECT status FROM stock_counts WHERE id=$1 FOR UPDATE").bind(id).fetch_optional(&mut *tx).await?;
-    if st.ok_or_else(|| AppError::not_found("count"))? != "DRAFT" { return Err(AppError::conflict("INVALID_STATE", "This count is no longer a draft")); }
+    let hd = sqlx::query("SELECT status, location_id FROM stock_counts WHERE id=$1 FOR UPDATE").bind(id).fetch_optional(&mut *tx).await?.ok_or_else(|| AppError::not_found("count"))?;
+    user.require_location(hd.get::<Uuid, _>("location_id"))?;
+    if hd.get::<String, _>("status") != "DRAFT" { return Err(AppError::conflict("INVALID_STATE", "This count is no longer a draft")); }
     for (i, l) in b.lines.iter().enumerate() {
         let item_type: Option<String> = sqlx::query_scalar("SELECT item_type FROM stock_count_lines WHERE id=$1 AND count_id=$2").bind(l.line_id).bind(id).fetch_optional(&mut *tx).await?;
         let item_type = item_type.ok_or_else(|| AppError::field("line_id", "line does not belong to this count"))?;
@@ -390,22 +400,25 @@ pub async fn count_lines(State(s): State<AppState>, user: AuthUser, Id(id): Id, 
     Ok(Json(v))
 }
 
-pub async fn count_get(State(s): State<AppState>, Id(id): Id) -> AppResult<Json<Value>> {
+pub async fn count_get(State(s): State<AppState>, user: AuthUser, Id(id): Id) -> AppResult<Json<Value>> {
     let mut c = s.db.acquire().await?;
-    Ok(Json(count_one(&mut c, id).await?))
+    let v = count_one(&mut c, id).await?;
+    user.require_location(loc_of(&v))?;
+    Ok(Json(v))
 }
 
 #[derive(Deserialize, Default)]
-pub struct CountListQ { status: Option<String>, limit: Option<i64>, offset: Option<i64> }
+pub struct CountListQ { location_id: Option<String>, status: Option<String>, limit: Option<i64>, offset: Option<i64> }
 
-pub async fn count_list(State(s): State<AppState>, Q(q): Q<CountListQ>) -> AppResult<Json<Value>> {
+pub async fn count_list(State(s): State<AppState>, user: AuthUser, Q(q): Q<CountListQ>) -> AppResult<Json<Value>> {
+    let locs = { let mut c = s.db.acquire().await?; bh::list_scope(&mut c, &user, &q.location_id).await? };
     if let Some(st) = &q.status { if !["DRAFT", "POSTED", "CANCELLED"].contains(&st.as_str()) { return Err(AppError::field("status", "unknown status")); } }
     let pq = validate::PageQuery { limit: q.limit, offset: q.offset };
     Ok(Json(bh::paged(&s.db,
-        "SELECT jsonb_build_object('id', c.id, 'cnt_no', c.cnt_no, 'zone', c.zone, 'status', c.status, 'note', c.note, 'created_at', c.created_at, 'posted_at', c.posted_at,
+        "SELECT jsonb_build_object('id', c.id, 'cnt_no', c.cnt_no, 'location_id', c.location_id, 'zone', c.zone, 'status', c.status, 'note', c.note, 'created_at', c.created_at, 'posted_at', c.posted_at,
                 'total_lines', (SELECT count(*) FROM stock_count_lines WHERE count_id = c.id), 'counted_lines', (SELECT count(*) FROM stock_count_lines WHERE count_id = c.id AND counted_qty IS NOT NULL)) AS j,
                 c.created_at AS ca, c.id AS cid
-         FROM stock_counts c WHERE ($1::text IS NULL OR c.status = $1)", "ca DESC, cid", &[Arg::t(&q.status)], pq.limit(), pq.offset()).await?))
+         FROM stock_counts c WHERE c.location_id = ANY($2) AND ($1::text IS NULL OR c.status = $1)", "ca DESC, cid", &[Arg::t(&q.status), Arg::UA(locs)], pq.limit(), pq.offset()).await?))
 }
 
 #[derive(Deserialize, Default)]
@@ -414,8 +427,9 @@ pub struct PostReq { #[serde(default)] confirm: bool }
 
 pub async fn count_cancel(State(s): State<AppState>, user: AuthUser, Id(id): Id) -> AppResult<Json<Value>> {
     let mut tx = s.db.begin().await?;
-    let st: Option<String> = sqlx::query_scalar("SELECT status FROM stock_counts WHERE id=$1 FOR UPDATE").bind(id).fetch_optional(&mut *tx).await?;
-    if st.ok_or_else(|| AppError::not_found("count"))? != "DRAFT" { return Err(AppError::conflict("INVALID_STATE", "Only a draft count can be cancelled")); }
+    let hd = sqlx::query("SELECT status, location_id FROM stock_counts WHERE id=$1 FOR UPDATE").bind(id).fetch_optional(&mut *tx).await?.ok_or_else(|| AppError::not_found("count"))?;
+    user.require_location(hd.get::<Uuid, _>("location_id"))?;
+    if hd.get::<String, _>("status") != "DRAFT" { return Err(AppError::conflict("INVALID_STATE", "Only a draft count can be cancelled")); }
     sqlx::query("UPDATE stock_counts SET status='CANCELLED' WHERE id=$1").bind(id).execute(&mut *tx).await?;
     audit::log(&mut *tx, Some(&user), "COUNT_CANCEL", "stock_count", Some(id.to_string()), json!({})).await;
     let v = count_one(&mut tx, id).await?;
@@ -429,7 +443,9 @@ pub async fn count_post(State(s): State<AppState>, user: AuthUser, Id(id): Id, Q
     let dry = dq.on();
     let pct = s.settings.get().large_adjust_pct;
     let mut tx = s.db.begin().await?;
-    let h = sqlx::query("SELECT status, zone, cnt_no FROM stock_counts WHERE id=$1 FOR UPDATE").bind(id).fetch_optional(&mut *tx).await?.ok_or_else(|| AppError::not_found("count"))?;
+    let h = sqlx::query("SELECT status, zone, cnt_no, location_id FROM stock_counts WHERE id=$1 FOR UPDATE").bind(id).fetch_optional(&mut *tx).await?.ok_or_else(|| AppError::not_found("count"))?;
+    let loc: Uuid = h.get("location_id");
+    user.require_location(loc)?;
     if h.get::<String, _>("status") != "DRAFT" { return Err(AppError::conflict("INVALID_STATE", "This count was already posted or cancelled")); }
     let zone = bh::zone("zone", &h.get::<String, _>("zone"))?;
     let cnt_no: String = h.get("cnt_no");
@@ -454,8 +470,8 @@ pub async fn count_post(State(s): State<AppState>, user: AuthUser, Id(id): Id, Q
         let expected: Decimal = l.get("expected_qty");
         let name: String = l.get("name");
         let ctx = ItemCtx { kind, id: item, name: name.clone(), returnable: false };
-        let reserved = lock_reserved(&mut tx, &ctx, zone, lot).await?;
-        let cur = balance_locked(&mut tx, &ctx, zone, lot).await?;
+        let reserved = lock_reserved(&mut tx, loc, &ctx, zone, lot).await?;
+        let cur = balance_locked(&mut tx, loc, &ctx, zone, lot).await?;
         let var = counted - expected;
         if !var.is_zero() && (expected <= Decimal::ZERO || var.abs() * Decimal::from(100) > expected * Decimal::from(pct)) && l.get::<String, _>("note").trim().is_empty() {
             return Err(AppError::field("lines", &format!("{name}: a note is required for a large variance ({} expected, {} counted)", expected.normalize(), counted.normalize())));
@@ -472,7 +488,7 @@ pub async fn count_post(State(s): State<AppState>, user: AuthUser, Id(id): Id, Q
         }
         if warnings.len() < 12 { warnings.push(format!("{name}: {} -> {} ({}{})", cur.normalize(), counted.normalize(), if delta > Decimal::ZERO { "+" } else { "" }, delta.normalize())); }
         let kind_it: ItemType = kind.it();
-        moves.push(Move::new(kind_it, item, zone, lot, delta, "ADJUST").reference("COUNT", id).by(Some(user.id)).note(format!("stock count {cnt_no}")));
+        moves.push(Move::new(kind_it, item, zone, lot, delta, "ADJUST").at(loc).reference("COUNT", id).by(Some(user.id)).note(format!("stock count {cnt_no}")));
     }
     let mut head = vec![format!("Posting {cnt_no} changes {changed} stock line(s) in {zone}; this cannot be undone")];
     if uncounted > 0 { head.push(format!("{uncounted} line(s) were not counted and stay unchanged")); }

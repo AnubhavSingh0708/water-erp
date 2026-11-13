@@ -47,7 +47,7 @@ pub fn router() -> Router<AppState> {
 // Raw materials
 // ------------------------------------------------------------------------------------------------------------------
 #[derive(Deserialize, Default)]
-struct ListQ { category: Option<String>, q: Option<String>, low: Option<String>, format: Option<String>, limit: Option<i64>, offset: Option<i64> }
+struct ListQ { category: Option<String>, q: Option<String>, low: Option<String>, format: Option<String>, location_id: Option<String>, limit: Option<i64>, offset: Option<i64> }
 
 const MAT_BASE: &str = "
 WITH burn AS (
@@ -55,7 +55,7 @@ WITH burn AS (
   WHERE item_type='RAW' AND txn_type IN ('BLOW_ISSUE','BATCH_CONSUME','BATCH_WASTE') AND at >= now() - make_interval(days => $4::int) GROUP BY item_id),
 st AS (
   SELECT item_id, SUM(qty) FILTER (WHERE zone='RM_STORE') AS rm, SUM(qty) FILTER (WHERE zone <> 'SCRAP_YARD') AS total
-  FROM stock_balances WHERE item_type='RAW' GROUP BY item_id)
+  FROM stock_balances WHERE item_type='RAW' AND location_id = ANY($5) GROUP BY item_id)
 SELECT to_jsonb(m) || jsonb_build_object('stock_per_purchase_unit', m.stock_per_purchase_unit::text, 'unit_weight_g', m.unit_weight_g::text,
          'min_stock', m.min_stock::text, 'supplier_name', sp.name,
          'stock_rm_store', COALESCE(st.rm,0)::text, 'stock_total', COALESCE(st.total,0)::text,
@@ -68,12 +68,13 @@ FROM raw_materials m LEFT JOIN st ON st.item_id = m.id LEFT JOIN burn b ON b.ite
 WHERE m.is_active AND ($1::text IS NULL OR m.category = $1) AND ($2::text IS NULL OR m.name ILIKE $2 OR m.code ILIKE $2)
   AND (NOT $3::bool OR COALESCE(st.rm,0) <= 0 OR COALESCE(st.rm,0) < m.min_stock)";
 
-async fn list(State(s): State<AppState>, Q(q): Q<ListQ>) -> AppResult<Response> {
+async fn list(State(s): State<AppState>, user: AuthUser, Q(q): Q<ListQ>) -> AppResult<Response> {
+    let locs = { let mut c = s.db.acquire().await?; bh::read_locations(&mut c, &user, &q.location_id).await? };
     if let Some(c) = &q.category { if !CATEGORIES.contains(&c.as_str()) { return Err(AppError::field("category", "unknown category")); } }
     let csv = bh::is_csv(&q.format);
     let (limit, offset) = if csv { (bh::CSV_MAX_ROWS, 0) } else { (q.limit.unwrap_or(500).clamp(1, 500), q.offset.unwrap_or(0).max(0)) };
     let args = [Arg::t(&q.category), Arg::like(&q.q), Arg::B(matches!(q.low.as_deref(), Some("1") | Some("true"))),
-                Arg::I(s.settings.get().burn_rate_lookback_days.max(1))];
+                Arg::I(s.settings.get().burn_rate_lookback_days.max(1)), Arg::UA(locs)];
     let v = bh::paged(&s.db, MAT_BASE, "name, code", &args, limit, offset).await?;
     if csv {
         return Ok(bh::csv_response("raw-materials.csv", &[
@@ -91,21 +92,25 @@ async fn suppliers(State(s): State<AppState>) -> AppResult<axum::Json<Value>> {
         "SELECT COALESCE(jsonb_agg(j ORDER BY n), '[]'::jsonb) FROM (SELECT to_jsonb(x) AS j, x.name AS n FROM suppliers x WHERE x.is_active ORDER BY x.name LIMIT 500) t", &[]).await?))
 }
 
-async fn detail(State(s): State<AppState>, Id(id): Id) -> AppResult<axum::Json<Value>> {
+#[derive(Deserialize, Default)]
+struct LocQ { location_id: Option<String> }
+
+async fn detail(State(s): State<AppState>, user: AuthUser, Id(id): Id, Q(q): Q<LocQ>) -> AppResult<axum::Json<Value>> {
+    let locs = { let mut c = s.db.acquire().await?; bh::read_locations(&mut c, &user, &q.location_id).await? };
     let v = bh::jval(&s.db,
         "SELECT to_jsonb(m) || jsonb_build_object('stock_per_purchase_unit', m.stock_per_purchase_unit::text, 'unit_weight_g', m.unit_weight_g::text,
             'min_stock', m.min_stock::text,
-            'stock_rm_store', COALESCE((SELECT SUM(qty) FROM stock_balances WHERE item_type='RAW' AND item_id=m.id AND zone='RM_STORE'),0)::text,
-            'stock_total', COALESCE((SELECT SUM(qty) FROM stock_balances WHERE item_type='RAW' AND item_id=m.id AND zone <> 'SCRAP_YARD'),0)::text,
-            'lots', COALESCE((SELECT jsonb_agg(jsonb_build_object('lot_id', sb.lot_id, 'zone', sb.zone, 'qty', sb.qty::text, 'expiry_date', sb.expiry_date,
+            'stock_rm_store', COALESCE((SELECT SUM(qty) FROM stock_balances WHERE item_type='RAW' AND item_id=m.id AND zone='RM_STORE' AND location_id = ANY($2)),0)::text,
+            'stock_total', COALESCE((SELECT SUM(qty) FROM stock_balances WHERE item_type='RAW' AND item_id=m.id AND zone <> 'SCRAP_YARD' AND location_id = ANY($2)),0)::text,
+            'lots', COALESCE((SELECT jsonb_agg(jsonb_build_object('lot_id', sb.lot_id, 'location_id', sb.location_id, 'location_name', lo.name, 'zone', sb.zone, 'qty', sb.qty::text, 'expiry_date', sb.expiry_date,
                         'lot_no', gl.lot_no, 'grn_no', g.grn_no, 'received_at', sb.received_at)
                         ORDER BY sb.expiry_date NULLS LAST, sb.received_at, sb.lot_id)
-                      FROM stock_balances sb LEFT JOIN grn_lines gl ON gl.id = sb.lot_id LEFT JOIN grns g ON g.id = gl.grn_id
-                      WHERE sb.item_type='RAW' AND sb.item_id=m.id AND sb.qty > 0), '[]'::jsonb),
-            'recent_ledger', COALESCE((SELECT jsonb_agg(jsonb_build_object('id', x.id, 'at', x.at, 'zone', x.zone, 'lot_id', x.lot_id, 'qty_delta', x.qty_delta::text,
+                      FROM stock_balances sb JOIN locations lo ON lo.id = sb.location_id LEFT JOIN grn_lines gl ON gl.id = sb.lot_id LEFT JOIN grns g ON g.id = gl.grn_id
+                      WHERE sb.item_type='RAW' AND sb.item_id=m.id AND sb.qty > 0 AND sb.location_id = ANY($2)), '[]'::jsonb),
+            'recent_ledger', COALESCE((SELECT jsonb_agg(jsonb_build_object('id', x.id, 'at', x.at, 'location_id', x.location_id, 'zone', x.zone, 'lot_id', x.lot_id, 'qty_delta', x.qty_delta::text,
                         'balance_after', x.balance_after::text, 'txn_type', x.txn_type, 'note', x.note) ORDER BY x.id DESC)
-                      FROM (SELECT * FROM stock_ledger WHERE item_type='RAW' AND item_id=m.id ORDER BY id DESC LIMIT 20) x), '[]'::jsonb)
-         ) FROM raw_materials m WHERE m.id = $1", &[Arg::U(Some(id))]).await;
+                      FROM (SELECT * FROM stock_ledger WHERE item_type='RAW' AND item_id=m.id AND location_id = ANY($2) ORDER BY id DESC LIMIT 20) x), '[]'::jsonb)
+         ) FROM raw_materials m WHERE m.id = $1", &[Arg::U(Some(id)), Arg::UA(locs)]).await;
     match v { Ok(v) if !v.is_null() => Ok(axum::Json(v)), Ok(_) | Err(AppError::NotFound(_)) => Err(AppError::not_found("raw material")), Err(e) => Err(e) }
 }
 
@@ -215,7 +220,10 @@ SELECT COALESCE(jsonb_agg(j ORDER BY ca DESC), '[]'::jsonb) FROM (
          'avg_daily_burn', r.avg_daily_burn::text, 'days_cover', r.days_cover::text, 'lead_time_days', r.lead_time_days, 'safety_days', r.safety_days,
          'reorder_point', r.reorder_point::text, 'suggested_qty_purchase', r.suggested_qty_purchase::text, 'purchase_unit', m.purchase_unit,
          'stock_unit', m.stock_unit, 'stock_per_purchase_unit', m.stock_per_purchase_unit::text,
-         'suggested_supplier_id', r.suggested_supplier_id, 'supplier_name', s.name, 'created_at', r.created_at, 'updated_at', r.updated_at) AS j, r.created_at AS ca
+         'suggested_supplier_id', r.suggested_supplier_id, 'supplier_name', s.name,
+         'stock_by_location', COALESCE((SELECT jsonb_agg(jsonb_build_object('location_id', sb.location_id, 'location_name', lo.name, 'qty', sb.q::text) ORDER BY lo.name)
+              FROM (SELECT location_id, SUM(qty) AS q FROM stock_balances WHERE item_type='RAW' AND item_id=r.raw_material_id AND zone='RM_STORE' AND qty > 0 GROUP BY location_id) sb
+              JOIN locations lo ON lo.id = sb.location_id WHERE lo.kind <> 'TRANSIT'), '[]'::jsonb), 'created_at', r.created_at, 'updated_at', r.updated_at) AS j, r.created_at AS ca
   FROM reorder_recommendations r JOIN raw_materials m ON m.id = r.raw_material_id LEFT JOIN suppliers s ON s.id = r.suggested_supplier_id
   WHERE ($1::text IS NULL OR r.status = $1) ORDER BY r.created_at DESC LIMIT 500) t";
 

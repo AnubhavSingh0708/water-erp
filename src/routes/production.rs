@@ -41,13 +41,13 @@ pub fn router() -> Router<AppState> {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BlowReq {
-    run_date: Option<NaiveDate>, shift: String, equipment_id: Option<Uuid>, preform_material_id: Uuid, bottle_material_id: Uuid,
+    location_id: Option<Uuid>, run_date: Option<NaiveDate>, shift: String, equipment_id: Option<Uuid>, preform_material_id: Uuid, bottle_material_id: Uuid,
     preforms_issued: D, good_bottles: D, notes: Option<String>,
 }
 
 async fn blow_json(conn: &mut PgConnection, id: Uuid) -> AppResult<Value> {
     let v = bh::jval(&mut *conn,
-        "SELECT jsonb_build_object('id', r.id, 'run_no', r.run_no, 'run_date', r.run_date, 'shift', r.shift, 'equipment_id', r.equipment_id, 'equipment_name', e.name,
+        "SELECT jsonb_build_object('id', r.id, 'run_no', r.run_no, 'location_id', r.location_id, 'run_date', r.run_date, 'shift', r.shift, 'equipment_id', r.equipment_id, 'equipment_name', e.name,
             'preform_material_id', r.preform_material_id, 'preform_name', pm.name, 'bottle_material_id', r.bottle_material_id, 'bottle_name', bm.name,
             'preforms_issued', r.preforms_issued::text, 'good_bottles', r.good_bottles::text, 'scrap_pcs', r.scrap_pcs::text, 'scrap_pct', r.scrap_pct::text,
             'scrap_weight_kg', r.scrap_weight_kg::text, 'notes', r.notes, 'created_at', r.created_at, 'created_by_name', u.full_name)
@@ -76,6 +76,7 @@ async fn blow_create(State(s): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>, 
         warnings.push(format!("Scrap {}% is above the {}% limit", scrap_pct.normalize(), st.scrap_warn_pct));
     }
     let mut tx = s.db.begin().await?;
+    let loc = bh::production_location(&mut tx, &user, b.location_id).await?;
     let today = util::plant_today(&mut tx).await?;
     let run_date = b.run_date.unwrap_or(today);
     bh::check_entry_date("run_date", run_date, today, 31)?;
@@ -92,16 +93,16 @@ async fn blow_create(State(s): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>, 
     let id = Uuid::new_v4();
     let run_no = bh::doc_no(&mut tx, "blow_seq", "BLW", dry).await?;
     sqlx::query("INSERT INTO blow_molding_runs (id, run_no, run_date, shift, equipment_id, preform_material_id, bottle_material_id, preforms_issued, good_bottles,
-                 scrap_pcs, scrap_pct, scrap_weight_kg, notes, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)")
+                 scrap_pcs, scrap_pct, scrap_weight_kg, notes, created_by, location_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)")
         .bind(id).bind(&run_no).bind(run_date).bind(shift).bind(b.equipment_id).bind(b.preform_material_id).bind(b.bottle_material_id)
-        .bind(issued).bind(good).bind(scrap).bind(scrap_pct).bind(weight_kg).bind(&notes).bind(user.id).execute(&mut *tx).await?;
-    stock::consume_fefo(&mut tx, ItemType::Raw, b.preform_material_id, "RM_STORE", issued, "BLOW_ISSUE", Some("BLOW"), Some(id), Some(user.id), &run_no).await?;
+        .bind(issued).bind(good).bind(scrap).bind(scrap_pct).bind(weight_kg).bind(&notes).bind(user.id).bind(loc).execute(&mut *tx).await?;
+    stock::consume_fefo_at(&mut tx, loc, ItemType::Raw, b.preform_material_id, "RM_STORE", issued, "BLOW_ISSUE", Some("BLOW"), Some(id), Some(user.id), &run_no).await?;
     let mut moves = vec![];
     if good > Decimal::ZERO {
-        moves.push(Move::new(ItemType::Raw, b.bottle_material_id, "BLOW_FLOOR", stock::NIL_LOT, good, "BLOW_OUTPUT").reference("BLOW", id).by(Some(user.id)).note(run_no.clone()));
+        moves.push(Move::new(ItemType::Raw, b.bottle_material_id, "BLOW_FLOOR", stock::NIL_LOT, good, "BLOW_OUTPUT").at(loc).reference("BLOW", id).by(Some(user.id)).note(run_no.clone()));
     }
     if scrap > Decimal::ZERO {
-        moves.push(Move::new(ItemType::Raw, b.preform_material_id, "SCRAP_YARD", stock::NIL_LOT, scrap, "BLOW_SCRAP").reference("BLOW", id).by(Some(user.id)).note(run_no.clone()));
+        moves.push(Move::new(ItemType::Raw, b.preform_material_id, "SCRAP_YARD", stock::NIL_LOT, scrap, "BLOW_SCRAP").at(loc).reference("BLOW", id).by(Some(user.id)).note(run_no.clone()));
     }
     if !moves.is_empty() { stock::post_all(&mut tx, moves).await?; }
     if dry { return finish_dry(tx, "BLOW", id, &warnings).await; }
@@ -125,21 +126,22 @@ pub(crate) fn spawn_reorder_check(s: &AppState, ids: Vec<Uuid>) {
 }
 
 #[derive(Deserialize, Default)]
-struct RangeQ { from: Option<NaiveDate>, to: Option<NaiveDate>, format: Option<String>, limit: Option<i64>, offset: Option<i64> }
+struct RangeQ { location_id: Option<String>, from: Option<NaiveDate>, to: Option<NaiveDate>, format: Option<String>, limit: Option<i64>, offset: Option<i64> }
 
-async fn blow_list(State(s): State<AppState>, Q(q): Q<RangeQ>) -> AppResult<Response> {
+async fn blow_list(State(s): State<AppState>, user: AuthUser, Q(q): Q<RangeQ>) -> AppResult<Response> {
+    let locs = { let mut c = s.db.acquire().await?; bh::list_scope(&mut c, &user, &q.location_id).await? };
     let csv = bh::is_csv(&q.format);
     let pq = validate::PageQuery { limit: q.limit, offset: q.offset };
     let (limit, offset) = if csv { (bh::CSV_MAX_ROWS, 0) } else { (pq.limit(), pq.offset()) };
     let v = bh::paged(&s.db,
-        "SELECT jsonb_build_object('id', r.id, 'run_no', r.run_no, 'run_date', r.run_date, 'shift', r.shift, 'equipment_name', e.name,
+        "SELECT jsonb_build_object('id', r.id, 'run_no', r.run_no, 'location_id', r.location_id, 'run_date', r.run_date, 'shift', r.shift, 'equipment_name', e.name,
             'preform_name', pm.name, 'bottle_name', bm.name, 'preforms_issued', r.preforms_issued::text, 'good_bottles', r.good_bottles::text,
             'scrap_pcs', r.scrap_pcs::text, 'scrap_pct', r.scrap_pct::text, 'scrap_weight_kg', r.scrap_weight_kg::text, 'notes', r.notes, 'created_at', r.created_at) AS j,
             r.run_date AS rd, r.created_at AS ca, r.id AS rid
          FROM blow_molding_runs r JOIN raw_materials pm ON pm.id = r.preform_material_id JOIN raw_materials bm ON bm.id = r.bottle_material_id
          LEFT JOIN equipment e ON e.id = r.equipment_id
-         WHERE ($1::date IS NULL OR r.run_date >= $1) AND ($2::date IS NULL OR r.run_date <= $2)",
-        "rd DESC, ca DESC, rid", &[Arg::D(q.from), Arg::D(q.to)], limit, offset).await?;
+         WHERE r.location_id = ANY($3) AND ($1::date IS NULL OR r.run_date >= $1) AND ($2::date IS NULL OR r.run_date <= $2)",
+        "rd DESC, ca DESC, rid", &[Arg::D(q.from), Arg::D(q.to), Arg::UA(locs)], limit, offset).await?;
     if csv {
         return Ok(bh::csv_response("blow-runs.csv", &[("Run", "run_no"), ("Date", "run_date"), ("Shift", "shift"), ("Machine", "equipment_name"),
             ("Preform", "preform_name"), ("Bottle", "bottle_name"), ("Preforms issued", "preforms_issued"), ("Good bottles", "good_bottles"),
@@ -148,9 +150,11 @@ async fn blow_list(State(s): State<AppState>, Q(q): Q<RangeQ>) -> AppResult<Resp
     Ok(bh::json_resp(v))
 }
 
-async fn blow_get(State(s): State<AppState>, Id(id): Id) -> AppResult<Json<Value>> {
+async fn blow_get(State(s): State<AppState>, user: AuthUser, Id(id): Id) -> AppResult<Json<Value>> {
     let mut c = s.db.acquire().await?;
-    Ok(Json(blow_json(&mut c, id).await?))
+    let v = blow_json(&mut c, id).await?;
+    user.require_location(v["location_id"].as_str().and_then(|x| Uuid::parse_str(x).ok()).unwrap_or_default())?;
+    Ok(Json(v))
 }
 
 // ------------------------------------------------------------------------------------------------------------------

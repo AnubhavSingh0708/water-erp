@@ -27,9 +27,10 @@ pub fn router() -> Router<AppState> {
 }
 
 #[derive(Deserialize, Default)]
-struct ListQ { status: Option<String>, limit: Option<i64>, offset: Option<i64> }
+struct ListQ { location_id: Option<String>, status: Option<String>, limit: Option<i64>, offset: Option<i64> }
 
-async fn list(State(s): State<AppState>, Q(q): Q<ListQ>) -> AppResult<Json<Value>> {
+async fn list(State(s): State<AppState>, user: AuthUser, Q(q): Q<ListQ>) -> AppResult<Json<Value>> {
+    let locs = { let mut c = s.db.acquire().await?; bh::list_scope(&mut c, &user, &q.location_id).await? };
     let status = match q.status.as_deref() {
         None => Some("QUARANTINE".to_string()),
         Some("ALL") => None,
@@ -41,15 +42,17 @@ async fn list(State(s): State<AppState>, Q(q): Q<ListQ>) -> AppResult<Json<Value
             'last_test_result', (SELECT t.result FROM qc_tests t WHERE t.batch_id = b.id ORDER BY t.tested_at DESC, t.id DESC LIMIT 1),
             'tests_count', (SELECT count(*) FROM qc_tests t WHERE t.batch_id = b.id)) AS j,
             b.created_at AS ca, b.qc_decided_at AS dec, b.id AS bid
-         FROM production_batches b JOIN products p ON p.id = b.product_id WHERE ($1::text IS NULL OR b.qc_status = $1)");
+         FROM production_batches b JOIN products p ON p.id = b.product_id WHERE b.location_id = ANY($2) AND ($1::text IS NULL OR b.qc_status = $1)");
     // oldest waiting first; decided lists newest first
     let order = if status.as_deref() == Some("QUARANTINE") { "ca ASC, bid" } else { "dec DESC NULLS LAST, ca DESC, bid" };
-    Ok(Json(bh::paged(&s.db, base, order, &[Arg::T(status)], pq.limit(), pq.offset()).await?))
+    Ok(Json(bh::paged(&s.db, base, order, &[Arg::T(status), Arg::UA(locs)], pq.limit(), pq.offset()).await?))
 }
 
-async fn get_one(State(s): State<AppState>, Id(id): Id) -> AppResult<Json<Value>> {
+async fn get_one(State(s): State<AppState>, user: AuthUser, Id(id): Id) -> AppResult<Json<Value>> {
     let mut c = s.db.acquire().await?;
-    Ok(Json(batch_detail(&mut c, id).await?))
+    let v = batch_detail(&mut c, id).await?;
+    user.require_location(crate::routes::production::batches::loc_of(&v))?;
+    Ok(Json(v))
 }
 
 #[derive(Deserialize)]
@@ -70,12 +73,13 @@ fn bounded(field: &str, d: &Option<D>, hi: i64) -> AppResult<Option<Decimal>> {
     }
 }
 
-struct Locked { status: String, product_id: Uuid, batch_no: String, crates: i32, product_name: String }
+struct Locked { loc: Uuid, status: String, product_id: Uuid, batch_no: String, crates: i32, product_name: String }
 
-async fn lock_batch(tx: &mut sqlx::PgConnection, id: Uuid) -> AppResult<Locked> {
-    let r = sqlx::query("SELECT b.qc_status, b.product_id, b.batch_no, b.crates, p.name FROM production_batches b JOIN products p ON p.id = b.product_id WHERE b.id=$1 FOR UPDATE OF b")
+async fn lock_batch(tx: &mut sqlx::PgConnection, user: &AuthUser, id: Uuid) -> AppResult<Locked> {
+    let r = sqlx::query("SELECT b.location_id, b.qc_status, b.product_id, b.batch_no, b.crates, p.name FROM production_batches b JOIN products p ON p.id = b.product_id WHERE b.id=$1 FOR UPDATE OF b")
         .bind(id).fetch_optional(&mut *tx).await?.ok_or_else(|| AppError::not_found("batch"))?;
-    Ok(Locked { status: r.get("qc_status"), product_id: r.get("product_id"), batch_no: r.get("batch_no"), crates: r.get("crates"), product_name: r.get("name") })
+    user.require_location(r.get::<Uuid, _>("location_id"))?;
+    Ok(Locked { loc: r.get("location_id"), status: r.get("qc_status"), product_id: r.get("product_id"), batch_no: r.get("batch_no"), crates: r.get("crates"), product_name: r.get("name") })
 }
 
 fn require_quarantine(l: &Locked) -> AppResult<()> {
@@ -93,7 +97,7 @@ async fn add_test(State(s): State<AppState>, user: AuthUser, Id(id): Id, J(b): J
     let turb = bounded("turbidity_ntu", &b.turbidity_ntu, 1000)?;
     let remarks = bh::opt_text("remarks", &b.remarks, 500)?;
     let mut tx = s.db.begin().await?;
-    let l = lock_batch(&mut tx, id).await?;
+    let l = lock_batch(&mut tx, &user, id).await?;
     require_quarantine(&l)?;
     sqlx::query("INSERT INTO qc_tests (batch_id, tested_at, tested_by, tds_ppm, ph, ozone_ppm, turbidity_ntu, microbial_ok, seal_ok, label_ok, result, remarks)
                  VALUES ($1, clock_timestamp(), $2,$3,$4,$5,$6,$7,$8,$9,$10,$11)")
@@ -114,7 +118,7 @@ async fn approve(State(s): State<AppState>, user: AuthUser, Id(id): Id, body: ax
         else { serde_json::from_slice(&body).map_err(|_| AppError::bad("Invalid request body"))? };
     let notes = bh::opt_text("notes", &req.notes, 500)?;
     let mut tx = s.db.begin().await?;
-    let l = lock_batch(&mut tx, id).await?;
+    let l = lock_batch(&mut tx, &user, id).await?;
     require_quarantine(&l)?;
     // lock order shared with loading: batch row (above) -> QR sets -> stock
     sqlx::query("SELECT id FROM qr_crate_sets WHERE batch_id=$1 ORDER BY id FOR UPDATE").bind(id).execute(&mut *tx).await?;
@@ -125,10 +129,10 @@ async fn approve(State(s): State<AppState>, user: AuthUser, Id(id): Id, body: ax
         Some(_) => return Err(AppError::conflict("INVALID_STATE", "The latest QC test FAILED: record a passing test before approving, or reject the batch")),
     }
     let rem: Decimal = sqlx::query_scalar(
-        "SELECT COALESCE((SELECT qty FROM stock_balances WHERE item_type='PRODUCT' AND item_id=$1 AND zone='QC_QUARANTINE' AND lot_id=$2 FOR UPDATE), 0)")
-        .bind(l.product_id).bind(id).fetch_one(&mut *tx).await?;
+        "SELECT COALESCE((SELECT qty FROM stock_balances WHERE item_type='PRODUCT' AND item_id=$1 AND zone='QC_QUARANTINE' AND lot_id=$2 AND location_id=$3 FOR UPDATE), 0)")
+        .bind(l.product_id).bind(id).bind(l.loc).fetch_one(&mut *tx).await?;
     if rem > Decimal::ZERO {
-        stock::transfer(&mut tx, ItemType::Product, l.product_id, id, "QC_QUARANTINE", "FG_READY", rem, "QC_RELEASE", Some("QC"), Some(id), Some(user.id), &format!("QC approved {}", l.batch_no)).await?;
+        stock::transfer_between(&mut tx, ItemType::Product, l.product_id, id, l.loc, "QC_QUARANTINE", l.loc, "FG_READY", rem, "QC_RELEASE", Some("QC"), Some(id), Some(user.id), &format!("QC approved {}", l.batch_no)).await?;
     }
     sqlx::query("UPDATE production_batches SET qc_status='APPROVED', qc_decided_by=$2, qc_decided_at=now(), qc_notes=$3 WHERE id=$1").bind(id).bind(user.id).bind(&notes).execute(&mut *tx).await?;
     sqlx::query("UPDATE qr_crate_sets SET status='AVAILABLE' WHERE batch_id=$1 AND status='QUARANTINE'").bind(id).execute(&mut *tx).await?;
@@ -152,15 +156,15 @@ async fn reject(State(s): State<AppState>, user: AuthUser, Id(id): Id, J(b): J<R
     let reason = validate::required_text("reason", &b.reason, 500)?;
     if reason.chars().count() < 5 { return Err(AppError::field("reason", "must be at least 5 characters")); }
     let mut tx = s.db.begin().await?;
-    let l = lock_batch(&mut tx, id).await?;
+    let l = lock_batch(&mut tx, &user, id).await?;
     require_quarantine(&l)?;
     // lock order shared with loading: batch row (above) -> QR sets -> stock
     sqlx::query("SELECT id FROM qr_crate_sets WHERE batch_id=$1 ORDER BY id FOR UPDATE").bind(id).execute(&mut *tx).await?;
     let rem: Decimal = sqlx::query_scalar(
-        "SELECT COALESCE((SELECT qty FROM stock_balances WHERE item_type='PRODUCT' AND item_id=$1 AND zone='QC_QUARANTINE' AND lot_id=$2 FOR UPDATE), 0)")
-        .bind(l.product_id).bind(id).fetch_one(&mut *tx).await?;
+        "SELECT COALESCE((SELECT qty FROM stock_balances WHERE item_type='PRODUCT' AND item_id=$1 AND zone='QC_QUARANTINE' AND lot_id=$2 AND location_id=$3 FOR UPDATE), 0)")
+        .bind(l.product_id).bind(id).bind(l.loc).fetch_one(&mut *tx).await?;
     if rem > Decimal::ZERO {
-        stock::transfer(&mut tx, ItemType::Product, l.product_id, id, "QC_QUARANTINE", "SCRAP_YARD", rem, "QC_REJECT", Some("QC"), Some(id), Some(user.id), &format!("QC rejected {}: {reason}", l.batch_no)).await?;
+        stock::transfer_between(&mut tx, ItemType::Product, l.product_id, id, l.loc, "QC_QUARANTINE", l.loc, "SCRAP_YARD", rem, "QC_REJECT", Some("QC"), Some(id), Some(user.id), &format!("QC rejected {}: {reason}", l.batch_no)).await?;
     }
     sqlx::query("UPDATE production_batches SET qc_status='REJECTED', qc_decided_by=$2, qc_decided_at=now(), qc_notes=$3 WHERE id=$1").bind(id).bind(user.id).bind(&reason).execute(&mut *tx).await?;
     sqlx::query("UPDATE qr_crate_sets SET status='REJECTED' WHERE batch_id=$1 AND status IN ('QUARANTINE','AVAILABLE')").bind(id).execute(&mut *tx).await?;

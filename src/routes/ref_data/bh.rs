@@ -124,7 +124,7 @@ pub fn check_entry_date(field: &str, d: NaiveDate, today: NaiveDate, max_back_da
 // Parameterised JSON queries. SQL text is `&'static str` so user input can never be formatted into it.
 // ------------------------------------------------------------------------------------------------------------------
 #[derive(Clone, Debug)]
-pub enum Arg { TA(Vec<String>), T(Option<String>), U(Option<Uuid>), D(Option<NaiveDate>), I(i64), B(bool), N(Option<Decimal>) }
+pub enum Arg { UA(Vec<Uuid>), TA(Vec<String>), T(Option<String>), U(Option<Uuid>), D(Option<NaiveDate>), I(i64), B(bool), N(Option<Decimal>) }
 impl Arg {
     pub fn t(v: &Option<String>) -> Arg { Arg::T(v.clone()) }
     pub fn like(v: &Option<String>) -> Arg {
@@ -136,7 +136,7 @@ pub async fn jval<'e>(db: impl PgExecutor<'e>, sql: &str, args: &[Arg]) -> AppRe
     let mut q = sqlx::query_scalar::<_, Value>(sql);
     for a in args {
         q = match a {
-            Arg::TA(v) => q.bind(v.clone()), Arg::T(v) => q.bind(v.clone()), Arg::U(v) => q.bind(*v), Arg::D(v) => q.bind(*v),
+            Arg::UA(v) => q.bind(v.clone()), Arg::TA(v) => q.bind(v.clone()), Arg::T(v) => q.bind(v.clone()), Arg::U(v) => q.bind(*v), Arg::D(v) => q.bind(*v),
             Arg::I(v) => q.bind(*v), Arg::B(v) => q.bind(*v), Arg::N(v) => q.bind(*v),
         };
     }
@@ -194,7 +194,7 @@ pub fn csv_response(filename: &str, cols: &[(&str, &str)], items: &[Value]) -> R
 pub async fn effects_by_ref(conn: &mut PgConnection, ref_type: &str, ref_id: Uuid) -> AppResult<Value> {
     jval(&mut *conn,
         "SELECT COALESCE(jsonb_agg(jsonb_build_object('item', COALESCE(rm.name, p.name), 'item_type', l.item_type, 'item_id', l.item_id,
-                'zone', l.zone, 'lot_id', l.lot_id, 'delta', l.qty_delta::text, 'after', l.balance_after::text, 'txn_type', l.txn_type) ORDER BY l.id), '[]'::jsonb)
+                'zone', l.zone, 'location_id', l.location_id, 'lot_id', l.lot_id, 'delta', l.qty_delta::text, 'after', l.balance_after::text, 'txn_type', l.txn_type) ORDER BY l.id), '[]'::jsonb)
          FROM stock_ledger l
          LEFT JOIN raw_materials rm ON l.item_type = 'RAW' AND rm.id = l.item_id
          LEFT JOIN products p ON l.item_type = 'PRODUCT' AND p.id = l.item_id
@@ -239,6 +239,7 @@ macro_rules! batch_j {
         "jsonb_build_object('id', b.id, 'batch_no', b.batch_no, 'product_id', b.product_id, 'product_name', p.name, 'product_code', p.code, 'kind', p.kind,
            'crates', b.crates, 'qc_status', b.qc_status, 'produced_on', b.produced_on, 'mfg_date', b.mfg_date, 'expiry_date', b.expiry_date, 'shift', b.shift,
            'created_at', b.created_at, 'decided_at', b.qc_decided_at, 'crates_per_pallet', p.crates_per_pallet,
+           'location_id', b.location_id, 'location_name', (SELECT lo.name FROM locations lo WHERE lo.id = b.location_id),
            'pallets', b.crates / p.crates_per_pallet, 'loose_crates', b.crates % p.crates_per_pallet)"
     };
 }
@@ -249,3 +250,46 @@ macro_rules! local_date {
     ($col:expr, $n:expr) => { concat!("((", $col, " AT TIME ZONE 'UTC') + make_interval(mins => ", $n, "::int))::date") };
 }
 pub(crate) use local_date;
+
+// ------------------------------------------------------------------------------------------------------------------
+// Godown (location) helpers – API_REFERENCE 0.2-F
+// ------------------------------------------------------------------------------------------------------------------
+/// Active, selectable (non-TRANSIT) godowns the caller may use.
+pub async fn allowed_locations(conn: &mut PgConnection, user: &crate::auth::AuthUser) -> AppResult<Vec<Uuid>> {
+    let all: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM locations WHERE is_active AND kind <> 'TRANSIT' ORDER BY code").fetch_all(&mut *conn).await?;
+    Ok(all.into_iter().filter(|l| user.can_use_location(*l)).collect())
+}
+
+/// Read scope from the optional `location_id` query value: absent => the resolved default godown, `all` => every godown the
+/// caller may use, otherwise one validated godown (403 when not allowed).
+pub async fn read_locations(conn: &mut PgConnection, user: &crate::auth::AuthUser, raw: &Option<String>) -> AppResult<Vec<Uuid>> {
+    match raw.as_deref().map(str::trim) {
+        None | Some("") => Ok(vec![crate::util::resolve_location(conn, user, None).await?]),
+        Some("all") => allowed_locations(conn, user).await,
+        Some(x) => {
+            let id = Uuid::parse_str(x).map_err(|_| AppError::field("location_id", "must be a godown id or 'all'"))?;
+            Ok(vec![crate::util::resolve_location(conn, user, Some(id)).await?])
+        }
+    }
+}
+
+/// Godown a write acts on (body `location_id`).
+pub async fn write_location(conn: &mut PgConnection, user: &crate::auth::AuthUser, requested: Option<Uuid>) -> AppResult<Uuid> {
+    crate::util::resolve_location(conn, user, requested).await
+}
+
+/// Production flows (blow runs, batches) only happen at production sites.
+pub async fn production_location(conn: &mut PgConnection, user: &crate::auth::AuthUser, requested: Option<Uuid>) -> AppResult<Uuid> {
+    let loc = crate::util::resolve_location(conn, user, requested).await?;
+    let site: bool = sqlx::query_scalar("SELECT is_production_site FROM locations WHERE id=$1").bind(loc).fetch_one(&mut *conn).await?;
+    if !site { return Err(AppError::field("location_id", "production happens only at a production site")); }
+    Ok(loc)
+}
+
+/// Scope of a LIST endpoint: absent / `all` => every godown the caller may use (silent filtering), else one validated godown.
+pub async fn list_scope(conn: &mut PgConnection, user: &crate::auth::AuthUser, raw: &Option<String>) -> AppResult<Vec<Uuid>> {
+    match raw.as_deref().map(str::trim) {
+        None | Some("") | Some("all") => allowed_locations(conn, user).await,
+        Some(_) => read_locations(conn, user, raw).await,
+    }
+}

@@ -64,7 +64,7 @@ pub async fn evaluate_materials(conn: &mut PgConnection, st: &Settings, ids: &[U
 pub async fn evaluate(conn: &mut PgConnection, st: &Settings, rm_id: Uuid) -> AppResult<()> {
     let row = sqlx::query(
         "SELECT m.name, m.min_stock, m.stock_per_purchase_unit AS spp, m.default_supplier_id, COALESCE(s.lead_time_days, 7) AS lead,
-                COALESCE((SELECT SUM(qty) FROM stock_balances WHERE item_type='RAW' AND item_id=m.id AND zone='RM_STORE'), 0) AS cur,
+                COALESCE((SELECT SUM(qty) FROM stock_balances WHERE item_type='RAW' AND item_id=m.id AND zone='RM_STORE' AND location_id <> '00000000-0000-0000-0000-000000000002'), 0) AS cur,
                 COALESCE((SELECT -SUM(qty_delta) FROM stock_ledger WHERE item_type='RAW' AND item_id=m.id
                           AND txn_type IN ('BLOW_ISSUE','BATCH_CONSUME','BATCH_WASTE') AND at >= now() - make_interval(days => $2::int)), 0) AS used,
                 COALESCE((SELECT SUM(GREATEST(l.qty_ordered - l.qty_received, 0)) FROM po_lines l JOIN purchase_orders o ON o.id = l.po_id
@@ -154,12 +154,13 @@ pub async fn check_expiry(conn: &mut PgConnection, st: &Settings) -> AppResult<i
     let today = util::plant_today(&mut *conn).await?;
     let horizon = today + chrono::Duration::days(st.expiry_lead_days);
     let rows = sqlx::query(
-        "SELECT sb.item_type, sb.item_id, sb.zone, sb.lot_id, sb.qty, sb.expiry_date, COALESCE(rm.name, p.name, '?') AS name
+        "SELECT sb.item_type, sb.item_id, sb.zone, sb.lot_id, SUM(sb.qty) AS qty, MIN(sb.expiry_date) AS expiry_date, COALESCE(rm.name, p.name, '?') AS name
          FROM stock_balances sb
          LEFT JOIN raw_materials rm ON sb.item_type = 'RAW' AND rm.id = sb.item_id
          LEFT JOIN products p ON sb.item_type = 'PRODUCT' AND p.id = sb.item_id
          WHERE sb.qty > 0 AND sb.zone <> 'SCRAP_YARD' AND sb.expiry_date IS NOT NULL AND sb.expiry_date <= $1
-         ORDER BY sb.expiry_date LIMIT 500")
+         GROUP BY sb.item_type, sb.item_id, sb.zone, sb.lot_id, COALESCE(rm.name, p.name, '?')
+         ORDER BY MIN(sb.expiry_date) LIMIT 500")
         .bind(horizon).fetch_all(&mut *conn).await?;
     let mut raised = 0;
     for r in &rows {
