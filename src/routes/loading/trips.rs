@@ -21,7 +21,7 @@ pub fn id1(ids: &Ids) -> AppResult<Uuid> { ids.0.first().copied().ok_or_else(|| 
 // ------------------------------------------------------------------------------------------------ availability
 
 #[derive(Deserialize, Default)]
-pub struct AvailQ { product_id: Option<Uuid>, trip_id: Option<Uuid> }
+pub struct AvailQ { product_id: Option<Uuid>, trip_id: Option<Uuid>, location_id: Option<Uuid> }
 
 #[derive(FromRow)]
 struct AvailRow {
@@ -31,23 +31,32 @@ struct AvailRow {
 }
 
 /// `GET /availability?product_id=&trip_id=` - FEFO ordered, reservation-aware stock that can be loaded right now.
-pub async fn availability(State(st): State<AppState>, Q(q): Q<AvailQ>) -> AppResult<Json<Value>> {
+pub async fn availability(State(st): State<AppState>, user: AuthUser, Q(q): Q<AvailQ>) -> AppResult<Json<Value>> {
     let strict = st.settings.get().strict_qc_lock;
+    let mut conn = st.db.acquire().await?;
+    // godown: explicit, else the godown of the trip being loaded, else the user's default
+    let requested = match (q.location_id, q.trip_id) {
+        (Some(l), _) => Some(l),
+        (None, Some(t)) => sqlx::query_scalar("SELECT location_id FROM loading_trips WHERE id = $1").bind(t).fetch_optional(&mut *conn).await?,
+        _ => None,
+    };
+    let loc = util::resolve_location(&mut conn, &user, requested).await?;
+    let loc_name = location_name(&mut conn, loc).await?;
     let rows = sqlx::query_as::<_, AvailRow>(
         "SELECT b.product_id, p.name AS product_name, p.kind, p.units_per_crate, p.crates_per_pallet, b.id AS batch_id, b.batch_no, b.expiry_date, b.qc_status,
                 sb.zone, sb.qty AS on_hand,
                 COALESCE((SELECT SUM(ti.crates) FROM trip_items ti JOIN loading_trips t ON t.id = ti.trip_id
-                          WHERE ti.batch_id = b.id AND t.status = 'LOADING'), 0)::numeric AS reserved,
+                          WHERE ti.batch_id = b.id AND t.status = 'LOADING' AND t.location_id = $4), 0)::numeric AS reserved,
                 COALESCE((SELECT SUM(ti.crates) FROM trip_items ti WHERE ti.batch_id = b.id AND ti.trip_id = $3), 0)::numeric AS in_trip
          FROM production_batches b
          JOIN products p ON p.id = b.product_id
          JOIN stock_balances sb ON sb.item_type = 'PRODUCT' AND sb.item_id = b.product_id AND sb.lot_id = b.id
-              AND sb.zone = CASE b.qc_status WHEN 'APPROVED' THEN 'FG_READY' ELSE 'QC_QUARANTINE' END
+              AND sb.location_id = $4 AND sb.zone = CASE b.qc_status WHEN 'APPROVED' THEN 'FG_READY' ELSE 'QC_QUARANTINE' END
          WHERE sb.qty > 0 AND (b.qc_status = 'APPROVED' OR ($2 = false AND b.qc_status = 'QUARANTINE'))
            AND ($1::uuid IS NULL OR b.product_id = $1)
          ORDER BY b.expiry_date ASC, b.created_at ASC, b.id ASC LIMIT 500")
-        .bind(q.product_id).bind(strict).bind(q.trip_id)
-        .fetch_all(&st.db).await?;
+        .bind(q.product_id).bind(strict).bind(q.trip_id).bind(loc)
+        .fetch_all(&mut *conn).await?;
     let out: Vec<Value> = rows.into_iter().map(|r| {
         let avail = floor_i64((r.on_hand - r.reserved).max(Decimal::ZERO));
         let cpp = r.crates_per_pallet.map(|c| c as i64);
@@ -56,7 +65,7 @@ pub async fn availability(State(st): State<AppState>, Q(q): Q<AvailQ>) -> AppRes
             "crates_per_pallet": r.crates_per_pallet,
             "batch_id": r.batch_id, "batch_no": r.batch_no, "expiry_date": r.expiry_date, "qc_status": r.qc_status, "zone": r.zone,
             "fg_ready": floor_i64(r.on_hand), "reserved": floor_i64(r.reserved), "available": avail,
-            "in_trip": floor_i64(r.in_trip),
+            "in_trip": floor_i64(r.in_trip), "location_id": loc, "location_name": loc_name,
             "available_pallets": cpp.map(|c| avail / c), "available_loose_crates": cpp.map(|c| avail % c),
         })
     }).collect();
@@ -65,21 +74,28 @@ pub async fn availability(State(st): State<AppState>, Q(q): Q<AvailQ>) -> AppRes
 
 // ------------------------------------------------------------------------------------------------ summary
 
-pub async fn summary(State(st): State<AppState>) -> AppResult<Json<Value>> {
+#[derive(Deserialize, Default)]
+pub struct SummaryQ { location_id: Option<Uuid> }
+
+pub async fn summary(State(st): State<AppState>, user: AuthUser, Q(q): Q<SummaryQ>) -> AppResult<Json<Value>> {
+    let scope: Option<Vec<Uuid>> = match q.location_id {
+        Some(l) => { user.require_location(l)?; Some(vec![l]) }
+        None => location_scope(&user),
+    };
     let mut conn = st.db.acquire().await?;
     let today = util::plant_today(&mut conn).await?;
     let off = st.settings.get().utc_offset_minutes as i32;
     let r: (i64, i64, i64, i64, i64, i64) = sqlx::query_as(
         "SELECT
-           (SELECT COUNT(*) FROM loading_trips WHERE status = 'LOADING'),
-           (SELECT COUNT(*) FROM loading_trips WHERE status = 'DISPATCHED'),
-           (SELECT COUNT(*) FROM loading_trips WHERE status = 'SETTLED' AND ((settled_at AT TIME ZONE 'UTC') + make_interval(mins => $2))::date = $1),
+           (SELECT COUNT(*) FROM loading_trips WHERE status = 'LOADING' AND ($3::uuid[] IS NULL OR location_id = ANY($3))),
+           (SELECT COUNT(*) FROM loading_trips WHERE status = 'DISPATCHED' AND ($3::uuid[] IS NULL OR location_id = ANY($3))),
+           (SELECT COUNT(*) FROM loading_trips WHERE status = 'SETTLED' AND ($3::uuid[] IS NULL OR location_id = ANY($3)) AND ((settled_at AT TIME ZONE 'UTC') + make_interval(mins => $2))::date = $1),
            (SELECT COALESCE(SUM(ti.crates), 0)::bigint FROM trip_items ti JOIN loading_trips t ON t.id = ti.trip_id
-             WHERE t.status IN ('DISPATCHED','SETTLED') AND ((t.gate_pass_issued_at AT TIME ZONE 'UTC') + make_interval(mins => $2))::date = $1),
-           (SELECT COUNT(*) FROM dispatch_notes WHERE status = 'ISSUED' AND ((created_at AT TIME ZONE 'UTC') + make_interval(mins => $2))::date = $1),
+             WHERE t.status IN ('DISPATCHED','SETTLED') AND ($3::uuid[] IS NULL OR t.location_id = ANY($3)) AND ((t.gate_pass_issued_at AT TIME ZONE 'UTC') + make_interval(mins => $2))::date = $1),
+           (SELECT COUNT(*) FROM dispatch_notes WHERE status = 'ISSUED' AND ($3::uuid[] IS NULL OR location_id = ANY($3)) AND ((created_at AT TIME ZONE 'UTC') + make_interval(mins => $2))::date = $1),
            (SELECT COALESCE(SUM(l.crates), 0)::bigint FROM dispatch_lines l JOIN dispatch_notes d ON d.id = l.dn_id
-             WHERE d.status = 'ISSUED' AND ((d.created_at AT TIME ZONE 'UTC') + make_interval(mins => $2))::date = $1)")
-        .bind(today).bind(off).fetch_one(&mut *conn).await?;
+             WHERE d.status = 'ISSUED' AND ($3::uuid[] IS NULL OR d.location_id = ANY($3)) AND ((d.created_at AT TIME ZONE 'UTC') + make_interval(mins => $2))::date = $1)")
+        .bind(today).bind(off).bind(&scope).fetch_one(&mut *conn).await?;
     Ok(Json(json!({
         "open_trips": r.0, "on_road": r.1, "settled_today": r.2, "crates_dispatched_today": r.3,
         "dispatch_notes_today": r.4, "crates_direct_today": r.5,
@@ -95,6 +111,8 @@ pub struct NewTrip {
     route_id: Option<Uuid>,
     driver_name: Option<String>,
     notes: Option<String>,
+    /// source godown (default: the caller's only godown, else MAIN)
+    location_id: Option<Uuid>,
     #[serde(default)]
     confirm: bool,
 }
@@ -103,6 +121,7 @@ pub async fn create_trip(State(st): State<AppState>, user: AuthUser, J(b): J<New
     let driver = match &b.driver_name { Some(d) => Some(validate::text("driver_name", d, 120)?), None => None };
     let notes = validate::text("notes", b.notes.as_deref().unwrap_or(""), 500)?;
     let mut tx = st.db.begin().await?;
+    let loc = util::resolve_location(&mut tx, &user, b.location_id).await?;
     // the vehicle row serialises concurrent trip creation for the same vehicle
     let v: Option<(String, i32, String, bool)> = sqlx::query_as("SELECT reg_no, capacity_crates, driver_name, is_active FROM vehicles WHERE id = $1 FOR UPDATE")
         .bind(b.vehicle_id).fetch_optional(&mut *tx).await?;
@@ -128,19 +147,23 @@ pub async fn create_trip(State(st): State<AppState>, user: AuthUser, J(b): J<New
     let trip_no = util::next_no(&mut tx, "trip_seq", "TR").await?;
     let driver = driver.filter(|d| !d.is_empty()).unwrap_or(vdriver);
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO loading_trips (trip_no, vehicle_id, route_id, driver_name, capacity_crates, notes, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id")
-        .bind(&trip_no).bind(b.vehicle_id).bind(b.route_id).bind(driver).bind(cap).bind(notes).bind(user.id)
+        "INSERT INTO loading_trips (trip_no, vehicle_id, route_id, driver_name, capacity_crates, notes, created_by, location_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id")
+        .bind(&trip_no).bind(b.vehicle_id).bind(b.route_id).bind(driver).bind(cap).bind(notes).bind(user.id).bind(loc)
         .fetch_one(&mut *tx).await?;
     let out = trip_json(&mut tx, id, true).await?;
-    audit::log(&mut *tx, Some(&user), "TRIP_CREATE", "loading_trip", Some(id.to_string()), json!({ "trip_no": trip_no, "vehicle": reg })).await;
+    audit::log(&mut *tx, Some(&user), "TRIP_CREATE", "loading_trip", Some(id.to_string()), json!({ "trip_no": trip_no, "vehicle": reg, "location_id": loc })).await;
     tx.commit().await?;
     Ok((StatusCode::CREATED, Json(out)).into_response())
 }
 
 #[derive(Deserialize, Default)]
-pub struct TripListQ { status: Option<String>, q: Option<String>, vehicle_id: Option<Uuid>, limit: Option<i64>, offset: Option<i64> }
+pub struct TripListQ { status: Option<String>, q: Option<String>, vehicle_id: Option<Uuid>, location_id: Option<Uuid>, limit: Option<i64>, offset: Option<i64> }
 
-pub async fn list_trips(State(st): State<AppState>, Q(q): Q<TripListQ>) -> AppResult<Json<Value>> {
+pub async fn list_trips(State(st): State<AppState>, user: AuthUser, Q(q): Q<TripListQ>) -> AppResult<Json<Value>> {
+    let scope: Option<Vec<Uuid>> = match q.location_id {
+        Some(l) => { user.require_location(l)?; Some(vec![l]) }
+        None => location_scope(&user),
+    };
     let status = match q.status.as_deref().map(str::trim) {
         None | Some("") | Some("ALL") => None,
         Some(s) if ["LOADING", "DISPATCHED", "SETTLED", "CANCELLED"].contains(&s) => Some(s.to_string()),
@@ -153,17 +176,21 @@ pub async fn list_trips(State(st): State<AppState>, Q(q): Q<TripListQ>) -> AppRe
     let page = validate::PageQuery { limit: q.limit, offset: q.offset };
     let filter = "WHERE ($1::text IS NULL OR t.status = $1)
         AND ($2::text IS NULL OR t.trip_no ILIKE $2 OR v.reg_no ILIKE $2 OR t.driver_name ILIKE $2 OR COALESCE(t.gate_pass_no,'') ILIKE $2)
-        AND ($3::uuid IS NULL OR t.vehicle_id = $3)";
+        AND ($3::uuid IS NULL OR t.vehicle_id = $3)
+        AND ($6::uuid[] IS NULL OR t.location_id = ANY($6))";
     let rows = sqlx::query_as::<_, TripRow>(&format!("{TRIP_SELECT} {filter} ORDER BY t.created_at DESC, t.id ASC LIMIT $4 OFFSET $5"))
-        .bind(&status).bind(&pat).bind(q.vehicle_id).bind(page.limit()).bind(page.offset()).fetch_all(&st.db).await?;
+        .bind(&status).bind(&pat).bind(q.vehicle_id).bind(page.limit()).bind(page.offset()).bind(&scope).fetch_all(&st.db).await?;
     let total: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM loading_trips t JOIN vehicles v ON v.id = t.vehicle_id {filter}"))
-        .bind(&status).bind(&pat).bind(q.vehicle_id).fetch_one(&st.db).await?;
+        .bind(&status).bind(&pat).bind(q.vehicle_id).bind(0i64).bind(0i64).bind(&scope).fetch_one(&st.db).await?;
     Ok(Json(json!({ "items": rows.iter().map(trip_value).collect::<Vec<_>>(), "total": total })))
 }
 
-pub async fn get_trip(State(st): State<AppState>, ids: Ids) -> AppResult<Json<Value>> {
+pub async fn get_trip(State(st): State<AppState>, user: AuthUser, ids: Ids) -> AppResult<Json<Value>> {
     let mut conn = st.db.acquire().await?;
-    Ok(Json(trip_json(&mut conn, id1(&ids)?, true).await?))
+    let id = id1(&ids)?;
+    let loc: Uuid = sqlx::query_scalar("SELECT location_id FROM loading_trips WHERE id = $1").bind(id).fetch_optional(&mut *conn).await?.ok_or_else(|| AppError::not_found("Trip"))?;
+    user.require_location(loc)?;
+    Ok(Json(trip_json(&mut conn, id, true).await?))
 }
 
 // ------------------------------------------------------------------------------------------------ items
@@ -187,7 +214,7 @@ pub async fn add_item(State(st): State<AppState>, user: AuthUser, headers: axum:
 
 async fn add_item_core(tx: &mut sqlx::PgConnection, st: &AppState, headers: &axum::http::HeaderMap, user: &AuthUser, trip_id: Uuid, b: AddItem, fx: &mut Fx) -> AppResult<Value> {
     // 1. the trip row is locked first (global lock order: trip -> batches -> stock rows)
-    let trip = lock_trip(tx, trip_id).await?;
+    let trip = lock_trip_for(tx, user, trip_id).await?;
     if trip.status != "LOADING" {
         return Err(invalid_state(format!("Trip {} is {} - items can only be changed while it is LOADING", trip.trip_no, trip.status), &trip.status));
     }
@@ -208,8 +235,7 @@ async fn add_item_core(tx: &mut sqlx::PgConnection, st: &AppState, headers: &axu
     if let Some(pid) = b.product_id {
         let known: Option<bool> = sqlx::query_scalar("SELECT true FROM products WHERE id = $1").bind(pid).fetch_optional(&mut *tx).await?;
         if known.is_none() { return Err(AppError::field("product_id", "unknown product")); }
-        prelock_product_batches(tx, pid).await?;
-        allocs = stock::allocate_free_fefo(tx, pid, n).await.map_err(whole_crates_error)?;
+        allocs = stock::allocate_free_fefo_at(tx, trip.location_id, pid, n).await.map_err(whole_crates_error)?;
     } else if let Some(bid) = b.batch_id {
         allocs.push((bid, n));
     }
@@ -224,7 +250,7 @@ async fn add_item_core(tx: &mut sqlx::PgConnection, st: &AppState, headers: &axu
     for bt in &batches {
         let take = want[&bt.id];
         let zone = load_zone(bt, strict)?;
-        let av = lot_avail(tx, bt.product_id, bt.id, zone).await?;
+        let av = lot_avail(tx, trip.location_id, bt.product_id, bt.id, zone).await?;
         if Decimal::from(take) > av.free { return Err(insufficient(bt, av.free, take)); }
         if bt.qc_status != "APPROVED" {
             fx.warn(format!("Batch {} is still in QC quarantine - these crates are not yet approved for sale", bt.batch_no));
@@ -266,7 +292,7 @@ async fn add_item_core(tx: &mut sqlx::PgConnection, st: &AppState, headers: &axu
 pub async fn delete_item(State(st): State<AppState>, user: AuthUser, ids: Ids) -> AppResult<Response> {
     let (trip_id, item_id) = match ids.0.as_slice() { [a, b] => (*a, *b), _ => return Err(AppError::bad("Invalid path")) };
     let mut tx = st.db.begin().await?;
-    let trip = lock_trip(&mut tx, trip_id).await?;
+    let trip = lock_trip_for(&mut tx, &user, trip_id).await?;
     if trip.status != "LOADING" {
         return Err(invalid_state(format!("Trip {} is {} - items can only be removed while it is LOADING", trip.trip_no, trip.status), &trip.status));
     }
@@ -288,7 +314,7 @@ pub async fn cancel_trip(State(st): State<AppState>, user: AuthUser, ids: Ids, J
     let id = id1(&ids)?;
     let reason = validate::text("reason", b.reason.as_deref().unwrap_or(""), 300)?;
     let mut tx = st.db.begin().await?;
-    let trip = lock_trip(&mut tx, id).await?;
+    let trip = lock_trip_for(&mut tx, &user, id).await?;
     if trip.status != "LOADING" {
         return Err(invalid_state(format!("Trip {} is {} - only a LOADING trip can be cancelled (use 'void gate pass' after dispatch)", trip.trip_no, trip.status), &trip.status));
     }

@@ -389,7 +389,7 @@ pub async fn add_set_to_trip(tx: &mut PgConnection, st: &AppState, headers: &Hea
     }
     let n = crates.unwrap_or(set.crates as i64);
     if n < 1 || n > set.crates as i64 { return Err(AppError::field("crates", &format!("must be between 1 and {} (the crates on this label)", set.crates))); }
-    let av = lot_avail(tx, bt.product_id, bt.id, zone).await?;
+    let av = lot_avail(tx, trip.location_id, bt.product_id, bt.id, zone).await?;
     if Decimal::from(n) > av.free { return Err(insufficient(&bt, av.free, n)); }
     let loaded: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(crates),0)::bigint FROM trip_items WHERE trip_id = $1").bind(trip.id).fetch_one(&mut *tx).await?;
     let cap = trip.capacity_crates as i64;

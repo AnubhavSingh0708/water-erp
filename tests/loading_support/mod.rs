@@ -60,6 +60,20 @@ impl Ctx {
         }
         b
     }
+    /// put `qty` crates of an APPROVED batch into a godown's FG_READY (the batch itself was produced at MAIN)
+    pub async fn stock_at(&self, loc: Uuid, product: Uuid, batch: Uuid, qty: i64) {
+        let mut tx = self.pool.begin().await.unwrap();
+        stock::post_all(&mut tx, vec![Move::new(ItemType::Product, product, "FG_READY", batch, Decimal::from(qty), "ADJUST").at(loc)
+            .expiry(Some(chrono::Utc::now().date_naive() + chrono::Duration::days(60)))]).await.unwrap();
+        tx.commit().await.unwrap();
+    }
+    pub async fn godown(&self, code: &str) -> Uuid {
+        sqlx::query_scalar("INSERT INTO locations (code,name,kind) VALUES ($1,$1,'GODOWN') RETURNING id").bind(code).fetch_one(&self.pool).await.unwrap()
+    }
+    pub async fn qty_at(&self, loc: Uuid, product: Uuid, zone: &str, lot: Uuid) -> Decimal {
+        sqlx::query_scalar("SELECT COALESCE(SUM(qty),0) FROM stock_balances WHERE location_id=$1 AND item_type='PRODUCT' AND item_id=$2 AND zone=$3 AND lot_id=$4")
+            .bind(loc).bind(product).bind(zone).bind(lot).fetch_one(&self.pool).await.unwrap()
+    }
     pub async fn vehicle(&self, cap: i32) -> Uuid {
         sqlx::query_scalar("INSERT INTO vehicles (reg_no,capacity_crates,driver_name) VALUES ('V'||floor(random()*1e9)::text,$1,'Ravi') RETURNING id")
             .bind(cap).fetch_one(&self.pool).await.unwrap()
@@ -82,7 +96,7 @@ impl Ctx {
     pub async fn assert_ledger_consistent(&self) {
         let bad: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM stock_balances sb WHERE sb.qty <> COALESCE((SELECT SUM(qty_delta) FROM stock_ledger l
-               WHERE l.item_type=sb.item_type AND l.item_id=sb.item_id AND l.zone=sb.zone AND l.lot_id=sb.lot_id),0)")
+               WHERE l.location_id=sb.location_id AND l.item_type=sb.item_type AND l.item_id=sb.item_id AND l.zone=sb.zone AND l.lot_id=sb.lot_id),0)")
             .fetch_one(&self.pool).await.unwrap();
         assert_eq!(bad, 0, "stock_balances diverged from the ledger");
     }
