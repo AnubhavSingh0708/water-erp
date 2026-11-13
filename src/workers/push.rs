@@ -80,9 +80,10 @@ pub async fn dispatch_with(state: &AppState, sender: Option<&dyn PushSender>) ->
                 "INSERT INTO push_deliveries (alert_id, user_id)
                  SELECT $1, u.id FROM users u
                  WHERE u.is_active AND u.subscribed_notifications @> jsonb_build_array($2::text)
+                   AND (u.is_admin OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(u.allowed_pages) pg WHERE pg = ANY($3::text[])))
                    AND EXISTS (SELECT 1 FROM push_subscriptions s WHERE s.user_id = u.id AND s.active)
                  ON CONFLICT (alert_id, user_id) DO NOTHING RETURNING user_id")
-                .bind(id).bind(&event_type).fetch_all(&mut *tx).await?;
+                .bind(id).bind(&event_type).bind(crate::alerts::event_pages(&event_type).iter().map(|p| p.to_string()).collect::<Vec<String>>()).fetch_all(&mut *tx).await?;
             stats.recipients += users.len();
             if !users.is_empty() {
                 let subs: Vec<(Uuid, Uuid, String, String, String)> = sqlx::query_as(

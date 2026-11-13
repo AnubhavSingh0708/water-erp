@@ -45,8 +45,13 @@ pub fn router() -> Router<AppState> {
 // types + subscriptions
 // ---------------------------------------------------------------------------------------------------------------
 
-async fn types(_u: AuthUser) -> Json<Value> {
-    Json(Value::Array(alerts::EVENT_TYPES.iter().map(|(c, l)| json!({ "code": c, "label": l })).collect()))
+/// Event types this user may subscribe to / see (Admin: all; others: types tied to a page they can open, `alerts::event_pages`).
+fn allowed_types(u: &AuthUser) -> Vec<String> {
+    alerts::EVENT_TYPES.iter().filter(|(c, _)| alerts::user_may_receive(u.is_admin, &u.allowed_pages, c)).map(|(c, _)| c.to_string()).collect()
+}
+
+async fn types(u: AuthUser) -> Json<Value> {
+    Json(Value::Array(alerts::EVENT_TYPES.iter().filter(|(c, _)| alerts::user_may_receive(u.is_admin, &u.allowed_pages, c)).map(|(c, l)| json!({ "code": c, "label": l })).collect()))
 }
 
 async fn current_subscriptions(state: &AppState, user: Uuid) -> AppResult<Vec<String>> {
@@ -55,7 +60,9 @@ async fn current_subscriptions(state: &AppState, user: Uuid) -> AppResult<Vec<St
 }
 
 async fn get_subscriptions(State(s): State<AppState>, u: AuthUser) -> AppResult<Json<Value>> {
-    Ok(Json(json!({ "subscribed": current_subscriptions(&s, u.id).await? })))
+    let mut subs = current_subscriptions(&s, u.id).await?;
+    subs.retain(|c| alerts::user_may_receive(u.is_admin, &u.allowed_pages, c));
+    Ok(Json(json!({ "subscribed": subs })))
 }
 
 #[derive(Deserialize)]
@@ -66,6 +73,9 @@ async fn put_subscriptions(State(s): State<AppState>, u: AuthUser, ApiJson(b): A
     if b.subscribed.len() > 100 { return Err(AppError::field("subscribed", "too many entries")); }
     if let Some(bad) = b.subscribed.iter().find(|c| !alerts::is_valid_event(c)) {
         return Err(AppError::field("subscribed", &format!("unknown notification type {}", bad.chars().take(40).collect::<String>())));
+    }
+    if let Some(bad) = b.subscribed.iter().find(|c| !alerts::user_may_receive(u.is_admin, &u.allowed_pages, c)) {
+        return Err(AppError::field("subscribed", &format!("you do not have access to {} notifications", bad)));
     }
     let set: BTreeSet<String> = b.subscribed.into_iter().collect();
     let list: Vec<String> = set.into_iter().collect();
@@ -183,7 +193,8 @@ pub async fn send_test_with(state: &AppState, sender: &dyn push::PushSender, use
 
 /// Alerts visible to `$1` (user id): ONLY event types in that user's current subscriptions. Resolved alerts stay visible for
 /// 30 days (open ones always).
-const VISIBLE: &str = "a.event_type IN (SELECT jsonb_array_elements_text(u.subscribed_notifications) FROM users u WHERE u.id = $1)
+/// `$2` = event types the caller may receive by permission (re-evaluated on every request, so removing a page hides old alerts).
+const VISIBLE: &str = "a.event_type = ANY($2::text[]) AND a.event_type IN (SELECT jsonb_array_elements_text(u.subscribed_notifications) FROM users u WHERE u.id = $1)
                        AND (a.resolved_at IS NULL OR a.created_at > now() - interval '30 days')";
 
 #[derive(Deserialize, Default)]
@@ -196,11 +207,11 @@ async fn inbox(State(s): State<AppState>, u: AuthUser, ApiQuery(q): ApiQuery<Inb
     let rows = sqlx::query(&format!(
         "SELECT a.id, a.event_type, a.severity, a.title, a.body, a.url, a.created_at, (r.alert_id IS NOT NULL) AS read, (a.resolved_at IS NOT NULL) AS resolved
          FROM alerts a LEFT JOIN alert_reads r ON r.alert_id = a.id AND r.user_id = $1
-         WHERE {VISIBLE}{unread_sql} ORDER BY a.created_at DESC, a.id DESC LIMIT $2 OFFSET $3"))
-        .bind(u.id).bind(p.limit()).bind(p.offset()).fetch_all(&s.db).await?;
+         WHERE {VISIBLE}{unread_sql} ORDER BY a.created_at DESC, a.id DESC LIMIT $3 OFFSET $4"))
+        .bind(u.id).bind(allowed_types(&u)).bind(p.limit()).bind(p.offset()).fetch_all(&s.db).await?;
     let total: i64 = sqlx::query_scalar(&format!(
         "SELECT COUNT(*) FROM alerts a LEFT JOIN alert_reads r ON r.alert_id = a.id AND r.user_id = $1 WHERE {VISIBLE}{unread_sql}"))
-        .bind(u.id).fetch_one(&s.db).await?;
+        .bind(u.id).bind(allowed_types(&u)).fetch_one(&s.db).await?;
     let items: Vec<Value> = rows.iter().map(|r| json!({
         "id": r.get::<Uuid, _>("id"), "event_type": r.get::<String, _>("event_type"), "severity": r.get::<String, _>("severity"),
         "title": r.get::<String, _>("title"), "body": r.get::<String, _>("body"), "url": r.get::<String, _>("url"),
@@ -212,13 +223,13 @@ async fn inbox(State(s): State<AppState>, u: AuthUser, ApiQuery(q): ApiQuery<Inb
 async fn unread_count(State(s): State<AppState>, u: AuthUser) -> AppResult<Json<Value>> {
     let n: i64 = sqlx::query_scalar(&format!(
         "SELECT COUNT(*) FROM alerts a LEFT JOIN alert_reads r ON r.alert_id = a.id AND r.user_id = $1 WHERE {VISIBLE} AND r.alert_id IS NULL"))
-        .bind(u.id).fetch_one(&s.db).await?;
+        .bind(u.id).bind(allowed_types(&u)).fetch_one(&s.db).await?;
     Ok(Json(json!({ "count": n })))
 }
 
 async fn mark_read(State(s): State<AppState>, u: AuthUser, ApiPath(id): ApiPath<Uuid>) -> AppResult<StatusCode> {
     // only alerts inside the caller's subscriptions can be marked: anything else is a plain 404 (no existence probing)
-    let visible: bool = sqlx::query_scalar(&format!("SELECT EXISTS (SELECT 1 FROM alerts a WHERE a.id = $2 AND {VISIBLE})")).bind(u.id).bind(id).fetch_one(&s.db).await?;
+    let visible: bool = sqlx::query_scalar(&format!("SELECT EXISTS (SELECT 1 FROM alerts a WHERE a.id = $3 AND {VISIBLE})")).bind(u.id).bind(allowed_types(&u)).bind(id).fetch_one(&s.db).await?;
     if !visible { return Err(AppError::not_found("notification")); }
     sqlx::query("INSERT INTO alert_reads (alert_id, user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING").bind(id).bind(u.id).execute(&s.db).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -228,6 +239,6 @@ async fn read_all(State(s): State<AppState>, u: AuthUser) -> AppResult<Json<Valu
     let r = sqlx::query(&format!(
         "INSERT INTO alert_reads (alert_id, user_id)
          SELECT a.id, $1 FROM alerts a WHERE {VISIBLE} ON CONFLICT DO NOTHING"))
-        .bind(u.id).execute(&s.db).await?;
+        .bind(u.id).bind(allowed_types(&u)).execute(&s.db).await?;
     Ok(Json(json!({ "marked": r.rows_affected() })))
 }

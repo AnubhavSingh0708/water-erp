@@ -93,3 +93,8 @@ Deviations from `API_REFERENCE.md`, decisions and hand-offs. Everything here is 
 * Path-id extractor errors (`ApiPath`) return the standard envelope (`400 BAD_REQUEST`).
 * **Known gaps:** the real `WebPushSender` was only exercised up to "connection failed" (sandbox has no push-service egress; request building/encryption is unit-tested by
   decrypting with the browser key). No `?dry_run` on maintenance `complete` (not required by the contract). Push delivery is at-most-once (no retry of transient failures).
+
+## Permission-gated notifications (Lead follow-up)
+Uses `alerts::event_pages` / `alerts::user_may_receive`: `GET /types`, `PUT/GET /subscriptions` (unknown or not-permitted type -> 422 on `subscribed`; GET hides stored but ineffective ones),
+inbox / unread-count / read / read-all (permission re-evaluated on every request, so granting or removing a page shows or hides old alerts) and the push dispatcher
+(recipient SQL requires Admin or one of the event's pages) all apply it. This supersedes the "not restricted by page" observation above.
