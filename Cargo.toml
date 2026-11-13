@@ -47,3 +47,9 @@ p256 = { version = "0.13", features = ["ecdsa", "pem"] }
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+
+# faster password hashing in debug builds / tests
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3

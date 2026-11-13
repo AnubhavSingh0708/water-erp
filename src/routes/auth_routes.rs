@@ -145,7 +145,7 @@ async fn login(State(st): State<AppState>, ci: ClientInfo, ApiJson(b): ApiJson<L
     let me = AuthUser {
         id: uid, username, full_name: u.get("full_name"), is_admin: u.get("is_admin"),
         allowed_pages: json_strings(u.get("allowed_pages")), subscribed_notifications: json_strings(u.get("subscribed_notifications")),
-        session_id: Uuid::nil(),
+        allowed_location_ids: vec![], session_id: Uuid::nil(),
     };
     Ok(session_response(StatusCode::OK, &key, expires_at, me_json(&me)))
 }
@@ -235,7 +235,7 @@ async fn setup_admin(State(st): State<AppState>, ci: ClientInfo, ApiJson(b): Api
     audit_raw(&mut tx, Some(id), Some(&username), ci.ip_string(), "SETUP_ADMIN", "user", Some(id.to_string()), json!({ "via": "setup-screen" })).await?;
     tx.commit().await?;
     if let Ok(k) = db_key(&st.db).await { SETUP_TOKENS.lock().unwrap_or_else(|e| e.into_inner()).remove(&k); }
-    let me = AuthUser { id, username, full_name, is_admin: true, allowed_pages: vec![], subscribed_notifications: vec![], session_id: Uuid::nil() };
+    let me = AuthUser { id, username, full_name, is_admin: true, allowed_pages: vec![], subscribed_notifications: vec![], allowed_location_ids: vec![], session_id: Uuid::nil() };
     Ok(session_response(StatusCode::CREATED, &key, expires_at, me_json(&me)))
 }
 
