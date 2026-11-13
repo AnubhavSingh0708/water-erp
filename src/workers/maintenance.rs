@@ -142,7 +142,7 @@ async fn jar_fleet(conn: &mut PgConnection, state: &AppState, today: chrono::Nai
     for p in jars::active_returnable_products(conn).await.map_err(|e| anyhow::anyhow!("{e}"))? {
         let name = p.name.clone();
         let pid = p.id;
-        let rep = jars::fleet_report(conn, p, today - chrono::Duration::days(29), today, st.utc_offset_minutes, st.jar_destroy_warn_pct).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        let rep = jars::fleet_report(conn, p, today - chrono::Duration::days(29), today, st.utc_offset_minutes, st.jar_destroy_warn_pct, None).await.map_err(|e| anyhow::anyhow!("{e}"))?;
         if rep.high_destroy_rate() {
             let rate = rep.destroy_rate_pct().map(|r| format!("{:.1}%", r)).unwrap_or_else(|| "no fills".into());
             current.push(Alert {
