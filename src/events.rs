@@ -137,12 +137,16 @@ impl Drop for StreamGuard {
 pub fn spawn_listener(state: AppState) {
     tokio::spawn(async move {
         loop {
-            match run_listener(&state).await {
-                Ok(()) => {}
-                Err(e) => tracing::warn!(error = ?e, "event listener interrupted; reconnecting"),
+            if state.shutdown.is_triggered() { break; }
+            tokio::select! {
+                _ = state.shutdown.wait() => break,
+                r = run_listener(&state) => {
+                    if state.shutdown.is_triggered() { break; }
+                    if let Err(e) = r { tracing::warn!(error = ?e, "event listener interrupted; reconnecting"); }
+                }
             }
             state.events.publish(vec!["resync".into()]);
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            tokio::select! { _ = tokio::time::sleep(Duration::from_secs(2)) => {}, _ = state.shutdown.wait() => break }
         }
     });
 }
@@ -162,6 +166,22 @@ async fn run_listener(state: &AppState) -> Result<(), sqlx::Error> {
         }
         topics.retain(|t| t.len() <= 32 && t.chars().all(|c| c.is_ascii_lowercase() || c == '_'));
         state.events.publish(topics.into_iter().collect());
+    }
+}
+
+/// Re-read the stream owner's permissions + session validity. Returns false when the session/user is gone.
+async fn refresh_user(st: &mut StreamState) -> bool {
+    let row: Option<(bool, serde_json::Value)> = sqlx::query_as(
+        "SELECT u.is_admin, u.allowed_pages FROM user_sessions s JOIN users u ON u.id = s.user_id
+         WHERE s.id = $1 AND s.expires_at > now() AND u.is_active")
+        .bind(st.user.session_id).fetch_optional(&st.state.db).await.ok().flatten();
+    match row {
+        Some((is_admin, pages)) => {
+            st.user.is_admin = is_admin;
+            st.user.allowed_pages = pages.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+            true
+        }
+        None => false,
     }
 }
 
@@ -211,6 +231,11 @@ pub async fn stream_handler(State(state): State<AppState>, user: AuthUser, Query
             tokio::select! {
                 r = st.rx.recv() => match r {
                     Ok(b) => {
+                        // permissions may have just changed: re-read them BEFORE filtering so revoked pages stop immediately
+                        if b.topics.iter().any(|t| t == "users") && !refresh_user(&mut st).await {
+                            st.done = true;
+                            return Some((Ok(Event::default().event("session_ended").data("{}")), st));
+                        }
                         let mine: Vec<String> = b.topics.iter().filter(|t| *t == "resync" || (user_may_see(&st.user, t) && st.wanted.as_ref().map_or(true, |w| w.contains(*t)))).cloned().collect();
                         if mine.is_empty() { continue; }
                         if mine.iter().any(|t| t == "resync") { return Some((Ok(Event::default().event("resync").data("{}")), st)); }
@@ -224,11 +249,8 @@ pub async fn stream_handler(State(state): State<AppState>, user: AuthUser, Query
                     return Some((Ok(Event::default().event("server_restarting").data("{}")), st));
                 }
                 _ = st.tick.tick() => {
-                    // a long-lived stream must not outlive its session or deactivated user
-                    let alive: Option<i32> = sqlx::query_scalar(
-                        "SELECT 1 FROM user_sessions s JOIN users u ON u.id = s.user_id
-                         WHERE s.id = $1 AND s.expires_at > now() AND u.is_active")
-                        .bind(st.user.session_id).fetch_optional(&st.state.db).await.ok().flatten();
+                    // a long-lived stream must not outlive its session/user, and must follow permission changes
+                    let alive = refresh_user(&mut st).await.then_some(1);
                     if alive.is_none() {
                         st.done = true;
                         return Some((Ok(Event::default().event("session_ended").data("{}")), st));

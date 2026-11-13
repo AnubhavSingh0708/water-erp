@@ -166,9 +166,15 @@ pub async fn fg_free(conn: &mut PgConnection, product_id: Uuid, batch_id: Uuid) 
 }
 
 /// FEFO-allocate `crates` of a product from APPROVED batches' *free* FG_READY stock. Locks the batch rows
-/// (`FOR UPDATE`) so concurrent allocators on the same batch serialise. Returns `(batch_id, crates)`; does NOT move stock –
+/// (`FOR UPDATE`, in a separate statement from the availability read – see comments) so concurrent allocators on the same batch serialise. Returns `(batch_id, crates)`; does NOT move stock –
 /// the caller then posts the ledger rows (or adds trip items) inside the same transaction.
 pub async fn allocate_free_fefo(conn: &mut PgConnection, product_id: Uuid, crates: i64) -> AppResult<Vec<(Uuid, i64)>> {
+    // Step 1: lock the candidate batch rows (stable order). Under READ COMMITTED a statement that waits for a row lock keeps its
+    // old snapshot, so reservations that committed while we waited would be invisible if we computed them in this same statement.
+    sqlx::query("SELECT b.id FROM production_batches b WHERE b.product_id = $1 AND b.qc_status = 'APPROVED'
+                 ORDER BY b.expiry_date ASC, b.created_at ASC, b.id ASC FOR UPDATE OF b")
+        .bind(product_id).fetch_all(&mut *conn).await?;
+    // Step 2: a NEW statement (fresh snapshot, locks now held) computes stock and reservations.
     let rows = sqlx::query(
         "SELECT b.id, sb.qty,
                 COALESCE((SELECT SUM(ti.crates) FROM trip_items ti JOIN loading_trips t ON t.id = ti.trip_id
@@ -176,8 +182,7 @@ pub async fn allocate_free_fefo(conn: &mut PgConnection, product_id: Uuid, crate
          FROM production_batches b
          JOIN stock_balances sb ON sb.item_type='PRODUCT' AND sb.item_id=b.product_id AND sb.zone='FG_READY' AND sb.lot_id=b.id
          WHERE b.product_id = $1 AND b.qc_status = 'APPROVED' AND sb.qty > 0
-         ORDER BY b.expiry_date ASC, b.created_at ASC, b.id ASC
-         FOR UPDATE OF b")
+         ORDER BY b.expiry_date ASC, b.created_at ASC, b.id ASC")
         .bind(product_id).fetch_all(&mut *conn).await?;
     let mut left = crates;
     let mut out = vec![];

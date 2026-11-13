@@ -163,3 +163,27 @@ async fn per_user_stream_cap(pool: PgPool) {
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(Sse::open(&app, &key, "").await.0, StatusCode::OK);
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn permission_changes_apply_to_open_streams(pool: PgPool) {
+    let app = setup(pool.clone(), 30).await;
+    let u = common::make_user(&pool, "floor2", false, &["qc"], &[]).await;
+    let key = common::session_for(&pool, u).await;
+    let mut s = Sse::open(&app, &key, "").await.1.unwrap();
+    assert_eq!(s.next(3).await.unwrap().0, "hello"); s.settle().await;
+    notify(&pool, &["jars"]).await;
+    assert!(s.drain_topics().await.is_empty(), "no jars access yet");
+    // admin grants the jars page: the SAME open stream must start receiving jars events
+    sqlx::query("UPDATE users SET allowed_pages = '[\"qc\",\"jars\"]' WHERE id = $1").bind(u).execute(&pool).await.unwrap();
+    s.settle().await;
+    notify(&pool, &["jars"]).await;
+    assert_eq!(s.drain_topics().await, vec!["jars"]);
+    // and revoking it stops delivery immediately
+    sqlx::query("UPDATE users SET allowed_pages = '[\"qc\"]' WHERE id = $1").bind(u).execute(&pool).await.unwrap();
+    s.settle().await;
+    notify(&pool, &["jars", "qc"]).await;
+    assert_eq!(s.drain_topics().await, vec!["qc"]);
+    // deactivating the user ends the stream
+    sqlx::query("UPDATE users SET is_active = false WHERE id = $1").bind(u).execute(&pool).await.unwrap();
+    loop { let (e, _) = s.next(4).await.expect("stream should end"); if e == "session_ended" { break; } }
+}

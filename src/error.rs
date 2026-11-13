@@ -117,7 +117,7 @@ pub fn hint_for(code: &str) -> Option<&'static str> {
         "RETRY" => "Another user changed the same stock at the same moment. Simply try again.",
         "LOCKED" => "Too many attempts. Wait a few minutes and try again.",
         "UNAVAILABLE" => "Wait a moment and retry. Your entry was not saved. If it keeps happening, tell the administrator.",
-        "FEATURE_DISABLED" => "An administrator can enable this feature in Settings.",
+        "FEATURE_DISABLED" => "This feature is switched off or not configured. Ask an administrator.",
         "INTERNAL" => "Something went wrong on the server. Your entry was not saved. Quote the reference shown to the administrator.",
         _ => return None,
     })
