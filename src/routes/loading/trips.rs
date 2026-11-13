@@ -209,7 +209,7 @@ async fn add_item_core(tx: &mut sqlx::PgConnection, st: &AppState, user: &AuthUs
         let known: Option<bool> = sqlx::query_scalar("SELECT true FROM products WHERE id = $1").bind(pid).fetch_optional(&mut *tx).await?;
         if known.is_none() { return Err(AppError::field("product_id", "unknown product")); }
         prelock_product_batches(tx, pid).await?;
-        allocs = stock::allocate_free_fefo(tx, pid, n).await?;
+        allocs = stock::allocate_free_fefo(tx, pid, n).await.map_err(whole_crates_error)?;
     } else if let Some(bid) = b.batch_id {
         allocs.push((bid, n));
     }

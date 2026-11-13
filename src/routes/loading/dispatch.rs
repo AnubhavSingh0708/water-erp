@@ -111,7 +111,7 @@ pub async fn create(State(st): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>, 
         let allocs: Vec<(Uuid, i64)> = if let Some(pid) = l.product_id {
             check_kind(&mut tx, pid, i).await?;
             // lines of the same product see the stock already taken by earlier lines (they are posted immediately)
-            stock::allocate_free_fefo(&mut tx, pid, l.crates).await?
+            stock::allocate_free_fefo(&mut tx, pid, l.crates).await.map_err(whole_crates_error)?
         } else {
             vec![(l.batch_id.unwrap_or_default(), l.crates)]
         };

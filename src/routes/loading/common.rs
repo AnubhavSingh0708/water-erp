@@ -203,6 +203,22 @@ pub async fn lot_avail(conn: &mut PgConnection, product_id: Uuid, batch_id: Uuid
     Ok(Avail { on_hand, reserved, free: on_hand - reserved })
 }
 
+/// The shared FEFO allocator reports decimals as strings; loading answers in whole crates everywhere.
+pub fn whole_crates_error(e: AppError) -> AppError {
+    match e {
+        AppError::Conflict { code: "INSUFFICIENT_STOCK", message, details } => {
+            let mut d = details;
+            for k in ["available", "required"] {
+                let n = d.get(k).and_then(|v| v.as_str().map(str::to_string).or_else(|| v.as_i64().map(|i| i.to_string())))
+                    .and_then(|s| s.parse::<Decimal>().ok());
+                if let Some(n) = n { d[k] = serde_json::json!(floor_i64(n).max(0)); }
+            }
+            AppError::Conflict { code: "INSUFFICIENT_STOCK", message, details: d }
+        }
+        other => other,
+    }
+}
+
 pub fn floor_i64(d: Decimal) -> i64 { d.floor().to_string().parse::<i64>().unwrap_or(0) }
 
 pub fn insufficient(b: &BatchRow, available: Decimal, required: i64) -> AppError {
