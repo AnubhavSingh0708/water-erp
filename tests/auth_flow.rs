@@ -284,42 +284,71 @@ async fn password_change_revokes_other_sessions(pool: PgPool) {
     assert_eq!(n, 1);
 }
 
+async fn setup_post(app: &Router, ip: &str, token: Option<&str>, user: &str, pw: &str) -> (StatusCode, Value, axum::http::HeaderMap) {
+    let mut b = json!({"username": user, "full_name": "Root", "password": pw});
+    if let Some(t) = token { b["setup_token"] = json!(t); }
+    req(app, "POST", "/api/setup/admin", None, Some(b), Some(ip), &[]).await
+}
+
 #[sqlx::test(migrations = "./migrations")]
-async fn setup_flow_and_disabled_afterwards(pool: PgPool) {
+async fn setup_flow_requires_token_and_is_disabled_afterwards(pool: PgPool) {
     let (app, _) = common::app(pool.clone()).await;
+    water_erp::routes::auth_routes::announce_setup_token(&pool).await.unwrap();
+    let token = water_erp::routes::auth_routes::peek_setup_token(&pool).await.expect("token announced");
+    assert!(token.len() >= 24);
     let (s, b, _) = req(&app, "GET", "/api/setup/status", None, None, None, &[]).await;
-    assert_eq!((s, &b["setup_required"]), (StatusCode::OK, &json!(true)));
-    // policy enforced
-    let (s, _, _) = req(&app, "POST", "/api/setup/admin", None, Some(json!({"username":"root","full_name":"Root","password":"short"})), Some("10.10.0.1"), &[]).await;
-    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
-    let (s, _, _) = req(&app, "POST", "/api/setup/admin", None, Some(json!({"username":"bad name!","full_name":"Root","password":PW})), Some("10.10.0.1"), &[]).await;
-    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
-    let (s, b, h) = req(&app, "POST", "/api/setup/admin", None, Some(json!({"username":"root","full_name":"Root","password":PW})), Some("10.10.0.1"), &[]).await;
+    assert_eq!((s, &b["setup_required"], &b["token_required"]), (StatusCode::OK, &json!(true), &json!(true)));
+    assert!(!b.to_string().contains(&token), "status must never leak the token");
+    // missing / wrong token => 403, nothing created
+    assert_eq!(setup_post(&app, "10.10.0.1", None, "root", PW).await.0, StatusCode::FORBIDDEN);
+    let (s, b, _) = setup_post(&app, "10.10.0.1", Some("wrong-token-wrong-token-wrong"), "root", PW).await;
+    assert_eq!((s, b["error"]["code"].as_str()), (StatusCode::FORBIDDEN, Some("FORBIDDEN")));
+    assert_eq!(setup_post(&app, "10.10.0.1", Some(""), "root", PW).await.0, StatusCode::FORBIDDEN);
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM users").fetch_one(&pool).await.unwrap();
+    assert_eq!(n, 0);
+    // policy still enforced with the right token
+    assert_eq!(setup_post(&app, "10.10.0.1", Some(&token), "root", "short").await.0, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(setup_post(&app, "10.10.0.1", Some(&token), "bad name!", PW).await.0, StatusCode::UNPROCESSABLE_ENTITY);
+    let (s, b, h) = setup_post(&app, "10.10.0.1", Some(&token), "root", PW).await;
     assert_eq!(s, StatusCode::CREATED, "{b}");
     assert_eq!(b["user"]["is_admin"], true);
     assert!(h.get("set-cookie").is_some());
     let key = b["key"].as_str().unwrap().to_string();
     assert_eq!(req(&app, "GET", "/api/me", Some(&key), None, None, &[]).await.0, StatusCode::OK);
     let (_, b, _) = req(&app, "GET", "/api/setup/status", None, None, None, &[]).await;
-    assert_eq!(b["setup_required"], false);
-    let (s, b, _) = req(&app, "POST", "/api/setup/admin", None, Some(json!({"username":"root2","full_name":"Root2","password":PW})), Some("10.10.0.1"), &[]).await;
+    assert_eq!((&b["setup_required"], &b["token_required"]), (&json!(false), &json!(false)));
+    assert!(water_erp::routes::auth_routes::peek_setup_token(&pool).await.is_none(), "token cleared");
+    // second attempt (even with the old token)
+    let (s, b, _) = setup_post(&app, "10.10.0.1", Some(&token), "root2", PW).await;
     assert_eq!((s, b["error"]["code"].as_str()), (StatusCode::CONFLICT, Some("SETUP_DISABLED")));
     // stays disabled even if the only admin is deactivated
     sqlx::query("UPDATE users SET is_active=false").execute(&pool).await.unwrap();
-    let (s, _, _) = req(&app, "POST", "/api/setup/admin", None, Some(json!({"username":"root3","full_name":"Root3","password":PW})), Some("10.10.0.1"), &[]).await;
-    assert_eq!(s, StatusCode::CONFLICT);
+    assert_eq!(setup_post(&app, "10.10.0.1", Some(&token), "root3", PW).await.0, StatusCode::CONFLICT);
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE is_admin").fetch_one(&pool).await.unwrap();
     assert_eq!(n, 1);
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn setup_token_is_generated_lazily_and_wrong_tokens_hit_the_ip_limiter(pool: PgPool) {
+    let (app, _) = common::app(pool.clone()).await;
+    // no explicit announce: the first status call creates the token (fail closed)
+    req(&app, "GET", "/api/setup/status", None, None, None, &[]).await;
+    assert!(water_erp::routes::auth_routes::peek_setup_token(&pool).await.is_some());
+    let mut last = StatusCode::OK;
+    for _ in 0..31 { last = setup_post(&app, "10.10.9.9", Some("nope"), "root", PW).await.0; }
+    assert_eq!(last, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn concurrent_setup_creates_exactly_one_admin(pool: PgPool) {
     let (app, _) = common::app(pool.clone()).await;
+    water_erp::routes::auth_routes::announce_setup_token(&pool).await.unwrap();
+    let token = water_erp::routes::auth_routes::peek_setup_token(&pool).await.unwrap();
     let mut hs = vec![];
     for i in 0..6 {
-        let app = app.clone();
+        let (app, token) = (app.clone(), token.clone());
         hs.push(tokio::spawn(async move {
-            req(&app, "POST", "/api/setup/admin", None, Some(json!({"username": format!("racer{i}"), "full_name": "R", "password": PW})), Some(&format!("10.11.0.{}", i + 1)), &[]).await.0
+            setup_post(&app, &format!("10.11.0.{}", i + 1), Some(&token), &format!("racer{i}"), PW).await.0
         }));
     }
     let mut codes = vec![];
@@ -328,6 +357,27 @@ async fn concurrent_setup_creates_exactly_one_admin(pool: PgPool) {
     assert!(codes.iter().filter(|c| **c != StatusCode::CREATED).all(|c| *c == StatusCode::CONFLICT), "{codes:?}");
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE is_admin").fetch_one(&pool).await.unwrap();
     assert_eq!(n, 1);
+}
+
+/// Argon2 work runs on the blocking pool behind a 4-permit semaphore: a login flood must not stall the async runtime.
+#[sqlx::test(migrations = "./migrations")]
+async fn login_flood_does_not_block_health(pool: PgPool) {
+    let (app, _) = common::app(pool.clone()).await;
+    user_with_pw(&pool, "floodtarget", false, &[]).await;
+    let mut hs = vec![];
+    for i in 0..30 {
+        let app = app.clone();
+        hs.push(tokio::spawn(async move {
+            req(&app, "POST", "/api/auth/login", None, Some(json!({"username":"floodtarget","password":"bad-bad-bad-bad"})), Some(&format!("10.13.0.{}", i + 1)), &[]).await.0
+        }));
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await; // let the flood reach the hashing stage
+    let t = std::time::Instant::now();
+    let (s, b, _) = req(&app, "GET", "/api/health", None, None, None, &[]).await;
+    let took = t.elapsed();
+    assert_eq!((s, &b["status"]), (StatusCode::OK, &json!("ok")));
+    assert!(took < std::time::Duration::from_millis(1500), "health took {took:?} while 30 logins were in flight");
+    for h in hs { let c = h.await.unwrap(); assert!(c == StatusCode::UNAUTHORIZED || c == StatusCode::TOO_MANY_REQUESTS); }
 }
 
 #[sqlx::test(migrations = "./migrations")]

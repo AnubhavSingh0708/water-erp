@@ -156,24 +156,71 @@ async fn login(State(st): State<AppState>, ci: ClientInfo, ApiJson(b): ApiJson<L
 
 async fn setup_status(State(st): State<AppState>) -> AppResult<Json<Value>> {
     let any_admin: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE is_admin)").fetch_one(&st.db).await?;
-    Ok(Json(json!({ "setup_required": !any_admin })))
+    if !any_admin { ensure_setup_token(&st.db).await?; }
+    Ok(Json(json!({ "setup_required": !any_admin, "token_required": !any_admin })))
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SetupReq { username: String, full_name: String, password: String }
+struct SetupReq { username: String, full_name: String, password: String, #[serde(default)] setup_token: Option<String> }
+
+// ---- one-time first-run setup token (stops a LAN neighbour from claiming the Admin account before the owner) ----------
+// Keyed by database name so that several databases in one process (tests) do not share a token; in production there is one entry.
+static SETUP_TOKENS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+async fn db_key(db: &sqlx::PgPool) -> AppResult<String> {
+    Ok(sqlx::query_scalar("SELECT current_database()").fetch_one(db).await?)
+}
+
+/// Returns the token (generating + logging it once if missing) while no Admin exists; `None` once an Admin exists.
+async fn ensure_setup_token(db: &sqlx::PgPool) -> AppResult<Option<String>> {
+    let any: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE is_admin)").fetch_one(db).await?;
+    let key = db_key(db).await?;
+    let mut m = SETUP_TOKENS.lock().unwrap_or_else(|e| e.into_inner());
+    if any { m.remove(&key); return Ok(None); }
+    if let Some(t) = m.get(&key) { return Ok(Some(t.clone())); }
+    let mut b = [0u8; 18];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut b);
+    let t = hex::encode(b); // 36 chars from the OS CSPRNG
+    tracing::warn!("FIRST-RUN SETUP TOKEN: {t}  (enter it on /setup.html to create the first administrator)");
+    m.insert(key, t.clone());
+    Ok(Some(t))
+}
+
+/// Called at start-up: if no Admin exists, create and log (once) the one-time setup token.
+pub async fn announce_setup_token(db: &sqlx::PgPool) -> anyhow::Result<()> {
+    ensure_setup_token(db).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(())
+}
+
+/// The currently valid token, if any (for tests and tooling inside the process; never exposed over HTTP).
+pub async fn peek_setup_token(db: &sqlx::PgPool) -> Option<String> {
+    let key = db_key(db).await.ok()?;
+    SETUP_TOKENS.lock().unwrap_or_else(|e| e.into_inner()).get(&key).cloned()
+}
+
+fn token_matches(given: &str, expected: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    let (a, b) = (Sha256::digest(given.as_bytes()), Sha256::digest(expected.as_bytes()));
+    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
 
 fn admin_pages_json() -> Value { json!(all_pages().into_iter().filter(|p| p != "admin").collect::<Vec<_>>()) }
 
 async fn setup_admin(State(st): State<AppState>, ci: ClientInfo, ApiJson(b): ApiJson<SetupReq>) -> AppResult<Response> {
-    ip_rate_check(ci.ip)?;
-    let username = check_username("username", &b.username)?;
-    let full_name = validate::required_text("full_name", &b.full_name, 120)?;
-    check_password_policy("password", &b.password, &username)?;
+    ip_rate_check(ci.ip)?; // every attempt (including wrong tokens) counts towards the per-IP limit
     let setup_disabled = || AppError::conflict("SETUP_DISABLED", "Setup has already been completed. Sign in instead.");
     // cheap pre-check before the expensive hash; the authoritative check is inside the locked transaction
     let any: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE is_admin)").fetch_one(&st.db).await?;
     if any { return Err(setup_disabled()); }
+    let expected = ensure_setup_token(&st.db).await?.ok_or_else(setup_disabled)?;
+    if !b.setup_token.as_deref().map_or(false, |g| g.len() <= 200 && token_matches(g.trim(), &expected)) {
+        return Err(AppError::forbidden("A valid setup token is required. It is printed in the server log at first start (FIRST-RUN SETUP TOKEN)."));
+    }
+    let username = check_username("username", &b.username)?;
+    let full_name = validate::required_text("full_name", &b.full_name, 120)?;
+    check_password_policy("password", &b.password, &username)?;
     let hash = hash_password(&b.password).await?;
 
     let mut tx = st.db.begin().await?;
@@ -187,6 +234,7 @@ async fn setup_admin(State(st): State<AppState>, ci: ClientInfo, ApiJson(b): Api
     let (key, expires_at) = create_session(&mut tx, id, &ci, st.settings.get().session_ttl_hours).await?;
     audit_raw(&mut tx, Some(id), Some(&username), ci.ip_string(), "SETUP_ADMIN", "user", Some(id.to_string()), json!({ "via": "setup-screen" })).await?;
     tx.commit().await?;
+    if let Ok(k) = db_key(&st.db).await { SETUP_TOKENS.lock().unwrap_or_else(|e| e.into_inner()).remove(&k); }
     let me = AuthUser { id, username, full_name, is_admin: true, allowed_pages: vec![], subscribed_notifications: vec![], session_id: Uuid::nil() };
     Ok(session_response(StatusCode::CREATED, &key, expires_at, me_json(&me)))
 }
@@ -209,6 +257,7 @@ pub async fn bootstrap_admin(db: &sqlx::PgPool, username: &str, password: &str) 
         .bind(&username).bind(&hash).bind(admin_pages_json()).fetch_one(&mut *tx).await?;
     audit_raw(&mut tx, Some(id), Some(&username), None, "SETUP_ADMIN", "user", Some(id.to_string()), json!({ "via": "cli" })).await.map_err(|e| anyhow::anyhow!("{e}"))?;
     tx.commit().await?;
+    if let Ok(k) = db_key(db).await { SETUP_TOKENS.lock().unwrap_or_else(|e| e.into_inner()).remove(&k); }
     tracing::info!(%username, "first administrator created");
     Ok(())
 }
