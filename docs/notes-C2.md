@@ -98,3 +98,13 @@ Deviations from `API_REFERENCE.md`, decisions and hand-offs. Everything here is 
 Uses `alerts::event_pages` / `alerts::user_may_receive`: `GET /types`, `PUT/GET /subscriptions` (unknown or not-permitted type -> 422 on `subscribed`; GET hides stored but ineffective ones),
 inbox / unread-count / read / read-all (permission re-evaluated on every request, so granting or removing a page shows or hides old alerts) and the push dispatcher
 (recipient SQL requires Admin or one of the event's pages) all apply it. This supersedes the "not restricted by page" observation above.
+
+## Multiple godowns (API_REFERENCE §0.2-F)
+* `receive-new`, `wash`, `destroy` (PLANT_EMPTY/PLANT_CLEAN), `receive-empties`, counter `issue` take optional body `location_id` (resolved by `util::resolve_location`: 403 foreign, 422 unknown/inactive/TRANSIT,
+  omitted => the single allowed godown else MAIN). All stock moves/reads use `Move::at`, `consume_fefo_at`, `available_at`, `allocate_free_fefo_at` (reservations are per godown). `jar_fleet_events.location_id` is
+  always stored (the handling godown, also for customer-site write-offs). Effects carry `location_id`.
+* `GET /summary` and `GET /fleet` accept `location_id` (uuid, or `all` = every godown the caller may use; omitted => resolve_location default). `fleet`/`summary` plant counts, `in_vehicles` (trip `location_id`), `fills` (batch
+  `location_id`) and fleet events (NULL location counts as MAIN) are filtered to the scope. **Customer holdings, `delivered` and `empties_returned` stay global** (jar_ledger has no godown), so `fleet.total` =
+  scope stock + in-vehicles of the scope + all customer holdings. `avg_cycles_estimate`/`retirement_pct` always use the WHOLE fleet (all godowns + transit + customers) so they do not depend on the filter.
+  `/fleet` adds `location_id` and `by_location:[{location_id,name,plant_empty,plant_clean,filled_ready,filled_quarantine}]` (all godowns the caller may use, zero rows included; others silently filtered).
+* The maintenance worker's JAR_FLEET_ALERT stays per product over the totals of all locations (`fleet_report(.., None)`). `GET /destroyed` items now include `location_id`.
