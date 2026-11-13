@@ -35,3 +35,35 @@ Deviations from `API_REFERENCE.md`, decisions and hand-offs. Everything here is 
 * Observation for the Lead (not changed): users may subscribe to any event type regardless of `allowed_pages`, so a user without the
   `jars` page can subscribe to `JAR_OVERDUE` and read customer names in alert titles. The contract says subscriptions are self-managed;
   if that is a concern, restrict `PUT /subscriptions` by page (map event type -> page) in a later pass.
+
+## Tier 2 – Returnable-container fleet (`/api/jars/*`)
+
+* **Migration `0014_jar_holding_guard.sql`** (only migration of C2): DEFERRED constraint trigger on `jar_ledger` – a customer's holding per
+  product can never be negative at COMMIT (SQLSTATE 23514 -> HTTP 400), serialised per (customer, product) with
+  `pg_advisory_xact_lock(hashtextextended('jar:<customer>:<product>', 0))`. Deferred, so row order inside one transaction does not matter.
+  **Heads-up C1:** settlement may insert its `jar_ledger` rows in any order, but the final per-(customer,product) sum must be >= 0 at commit
+  (your own pre-check should reject first). **Lead:** the trigger is the backstop for every writer, my handlers take the same advisory lock first.
+* `wash {product_id, qty, rejected?}`: **`qty` = containers that came out clean** (-> `JAR_CLEAN`), `rejected` = *additional* containers that failed
+  inspection (-> `SCRAP_YARD`, event DESTROYED/WASH_REJECT/PLANT_EMPTY). `JAR_EMPTY` is reduced by `qty + rejected` (FEFO over any lots, so non-nil
+  lots left by other modules work). One WASHED event with `qty`. A wash with more than `settle.damage_warn_pct` % rejects needs `confirm:true`.
+* `destroy`: always `CONFIRM_REQUIRED` until `confirm:true` (also under `?dry_run=1`). `location` PLANT_EMPTY/PLANT_CLEAN deduct FEFO from the zone and move
+  to `SCRAP_YARD`; CUSTOMER needs `customer_id` (forbidden for the other locations) and writes `jar_ledger WRITE_OFF`. Event + audit in the same tx.
+* `receive-empties`: `qty_good`/`qty_damaged` both optional (default 0, sum >= 1); more than the customer holds -> `400` (record an opening balance first).
+  Damaged ones write `DAMAGED` ledger rows, SCRAP_YARD stock and a DESTROYED/DAMAGED_RETURN event with `location=CUSTOMER`, `customer_id`.
+  More than `settle.damage_warn_pct` % damaged needs `confirm:true`.
+* `issue`: `stock::allocate_free_fefo` (reservation aware, APPROVED only, locks the batch rows); an already-overdue customer or >= 100 containers needs `confirm:true`.
+* `opening` has an optional `as_of` date (default today, never in the future) so the overdue clock starts at the real hand-out date; a second opening
+  for the same (customer, product) or >= 500 needs `confirm:true`.
+* `receive-new`: >= 1000 containers or > 25 % of the current fleet needs `confirm:true`.
+* Optional `note` (<= 500) on opening/issue/receive-empties/receive-new/wash.
+* Stock ledger `txn_type`s used: `JAR_ISSUE`, `JAR_RECEIVE`, `JAR_DAMAGED`, `JAR_PURCHASE`, `JAR_WASH`, `JAR_WASH_REJECT`, `JAR_DESTROY` (free text column).
+* `GET /summary` adds `in_vehicles`, `fleet_total`, `code`, `size_ml`, `max_cycles`. `GET /customers` hides customers with holding 0 unless `all=1`;
+  returns at most 500 rows ordered overdue first, then days outstanding. `GET /customers/{id}/ledger[?product_id=]` rows carry `balance_after`
+  (running holding per product); response also has `customer`.
+* `GET /fleet`: default period = last 30 plant-local days (so `alert` matches the worker's rule); `product_id` may be omitted when exactly one active
+  RETURNABLE product exists. Extra fields: `fleet.in_vehicles`, `period.from/to`, `lifetime{fills,destroyed}`, `warn_pct`, `alerts[]`.
+  Percentages and the cycle estimate are 2-dp strings (`"3.00"`); counts are JSON numbers. `fills` = Σ `production_batches.crates` by `produced_on`.
+  `delivered` = Σ `ISSUE_FILLED`, `empties_returned` = Σ `RETURN_EMPTY` (by `txn_date`); events are bucketed by plant-local date.
+  `HIGH_DESTROY_RATE` when `destroyed*100 > destroy_warn_pct*fills` (so any destruction with zero fills counts); `NEAR_RETIREMENT` at `retirement_pct >= 90`;
+  `HIGH_DESTROY_RATE` wins when both apply.
+* Dry runs return `effects[{item,zone,delta,after}]` with 4-dp strings (`"-2.0000"`); the customer side uses `zone:"CUSTOMER"`. Real responses (`201`) include `effects` and `warnings` too.
