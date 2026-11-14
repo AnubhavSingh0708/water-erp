@@ -47,3 +47,16 @@ QC test form 2-up numeric fields, "Reject" label no longer wraps; form pages (ne
 ## Left
 * Mixed `lot_id` for RAW lots that exist only in a GRN and never reached stock (fully consumed) is still not selectable (needs request 2).
 * Desktop ledger table is dense with 7 columns at 1024 px; works, could drop "Balance after" below 1280 px.
+
+## Addendum (after merging main with W1's backend)
+* Server-side contract of `/api/production/preform-stock` and `OVER_PRODUCED` re-read in `src/`; the page matches it. The prebuilt snapshot binary used for testing predates both (no Rust build possible),
+  so the pre-check was verified against a mocked endpoint (plenty/low/short/none/500/404) and the 404 path against the real binary; `OVER_PRODUCED` has a plain-language explanation in `warehouse-lib.js` `explain()` (also shown for count posts).
+* Double tap: every submit handler is wrapped in `L.once` and `submitDocument` ignores re-entry (found while testing: with the endpoint present, two taps stacked two review sheets). 1 row after dblclick.
+* Stale stock: INSUFFICIENT_STOCK / RESERVED_STOCK / INVALID_STATE on adjust/move/write-off re-load the lot list (`picker.refreshLots()`), so "On hand" shows the real balance next to the plain-language explanation.
+* Bugs fixed on the way: a literal "null" appended to the blow scrap echo and to the count difference chip (DOM `append(null)`); transit rows in review sheets now say "On the road / Raw store" and name godowns the user does not own.
+* Raw materials: filters in 2 columns, shorter tab labels ("Orders", "Receive"), Back button for GRN / PO forms.
+* RAW "0 here" candidates (lot held in another zone, lot held in another godown) were dry-run against the server: accepted. FG approved-batch candidate dry-run accepted.
+* Not done / for W2a: no shared code closes dialogs on `popstate` (checked: none), so opening a voucher right after `home()` is safe today; if one is added, revisit `clearSub()`.
+  `ui.errorState` joins message and hint without punctuation ("...on the server Try again in a moment.").
+* Demo-data side effects of testing: TF-261114-0003 received (a new TF-261114-0004 Main -> City is in transit), blow runs with 1234/1235/1236 preforms, 2-3 cancelled counts,
+  a 4,730 Cap write-off to the scrap yard that was "restored" with an adjustment (so Cap now also shows 4,730 in the scrap yard), 100 Cap in transit.
