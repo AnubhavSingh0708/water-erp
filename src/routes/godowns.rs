@@ -139,7 +139,7 @@ pub async fn create(State(s): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>, J
     let mut batch_ids: Vec<Uuid> = lines.iter().filter(|l| l.batch_product.is_some()).map(|l| l.lot).collect();
     batch_ids.sort(); batch_ids.dedup();
     if !batch_ids.is_empty() {
-        sqlx::query("SELECT id FROM production_batches WHERE id = ANY($1) ORDER BY id FOR UPDATE").bind(&batch_ids).execute(&mut *tx).await?;
+        sqlx::query("SELECT id FROM production_batches WHERE id = ANY($1) ORDER BY expiry_date ASC, created_at ASC, id ASC FOR UPDATE").bind(&batch_ids).execute(&mut *tx).await?;
     }
     let mut warnings = vec![];
     for l in &lines {
