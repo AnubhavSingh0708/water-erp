@@ -205,10 +205,11 @@ pub async fn generate(State(st): State<AppState>, user: AuthUser, headers: Heade
     require_labels_page(&user)?;
     let batch_id = *ids.0.first().ok_or_else(|| AppError::bad("Missing batch id"))?;
     let mut tx = st.db.begin().await?;
-    let bt: Option<(String, Uuid, i32, String, Option<i32>)> = sqlx::query_as(
-        "SELECT b.batch_no, b.product_id, b.crates, b.qc_status, p.crates_per_pallet FROM production_batches b JOIN products p ON p.id = b.product_id
+    let bt: Option<(String, Uuid, i32, String, Option<i32>, Uuid)> = sqlx::query_as(
+        "SELECT b.batch_no, b.product_id, b.crates, b.qc_status, p.crates_per_pallet, b.location_id FROM production_batches b JOIN products p ON p.id = b.product_id
          WHERE b.id = $1 FOR UPDATE OF b").bind(batch_id).fetch_optional(&mut *tx).await?;
-    let (batch_no, product_id, batch_crates, qc, cpp) = bt.ok_or_else(|| AppError::not_found("Batch"))?;
+    let (batch_no, product_id, batch_crates, qc, cpp, batch_loc) = bt.ok_or_else(|| AppError::not_found("Batch"))?;
+    user.require_location(batch_loc)?;
     if qc == "REJECTED" {
         return Err(AppError::conflict_with("QC_LOCKED", format!("Batch {batch_no} was rejected by Lab QC - no labels can be created"), json!({ "batch_id": batch_id, "qc_status": qc })));
     }
@@ -272,16 +273,25 @@ pub async fn generate(State(st): State<AppState>, user: AuthUser, headers: Heade
 
 // ------------------------------------------------------------------------------------------------ read endpoints
 
-pub async fn batch_sets(State(st): State<AppState>, headers: HeaderMap, ids: Ids) -> AppResult<Json<Value>> {
+/// 403 unless the caller may use the godown that produced the batch (404 for an unknown batch).
+async fn require_batch_location(conn: &mut PgConnection, user: &AuthUser, batch_id: Uuid) -> AppResult<()> {
+    let loc: Uuid = sqlx::query_scalar("SELECT location_id FROM production_batches WHERE id = $1").bind(batch_id).fetch_optional(&mut *conn).await?
+        .ok_or_else(|| AppError::not_found("Batch"))?;
+    user.require_location(loc)
+}
+
+pub async fn batch_sets(State(st): State<AppState>, user: AuthUser, headers: HeaderMap, ids: Ids) -> AppResult<Json<Value>> {
     let batch_id = *ids.0.first().ok_or_else(|| AppError::bad("Missing batch id"))?;
     let mut conn = st.db.acquire().await?;
+    require_batch_location(&mut conn, &user, batch_id).await?;
     let found: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM qr_crate_sets WHERE batch_id = $1 ORDER BY seq, created_at, id LIMIT 1000").bind(batch_id).fetch_all(&mut *conn).await?;
     Ok(Json(Value::Array(fetch_sets(&mut conn, &st, &headers, &found, false).await?)))
 }
 
-pub async fn sheet(State(st): State<AppState>, headers: HeaderMap, ids: Ids) -> AppResult<Json<Value>> {
+pub async fn sheet(State(st): State<AppState>, user: AuthUser, headers: HeaderMap, ids: Ids) -> AppResult<Json<Value>> {
     let batch_id = *ids.0.first().ok_or_else(|| AppError::bad("Missing batch id"))?;
     let mut conn = st.db.acquire().await?;
+    require_batch_location(&mut conn, &user, batch_id).await?;
     let b: Option<(String, Uuid, i32, String, NaiveDate, NaiveDate, String, i32, Option<i32>)> = sqlx::query_as(
         "SELECT b.batch_no, b.product_id, b.crates, b.qc_status, b.mfg_date, b.expiry_date, p.name, p.units_per_crate, p.crates_per_pallet
          FROM production_batches b JOIN products p ON p.id = b.product_id WHERE b.id = $1").bind(batch_id).fetch_optional(&mut *conn).await?;
@@ -299,7 +309,8 @@ pub async fn sheet(State(st): State<AppState>, headers: HeaderMap, ids: Ids) -> 
 #[derive(Deserialize, Default)]
 pub struct SearchQ { status: Option<String>, batch_id: Option<Uuid>, q: Option<String>, limit: Option<i64>, offset: Option<i64> }
 
-pub async fn search(State(st): State<AppState>, headers: HeaderMap, Q(q): Q<SearchQ>) -> AppResult<Json<Value>> {
+pub async fn search(State(st): State<AppState>, user: AuthUser, headers: HeaderMap, Q(q): Q<SearchQ>) -> AppResult<Json<Value>> {
+    let scope: Option<Vec<Uuid>> = location_scope(&user);
     let status = match q.status.as_deref().map(str::trim) {
         None | Some("") | Some("ALL") => None,
         Some(s) if ["QUARANTINE", "AVAILABLE", "RESERVED", "LOADED", "DELIVERED", "REJECTED"].contains(&s) => Some(s.to_string()),
@@ -311,28 +322,31 @@ pub async fn search(State(st): State<AppState>, headers: HeaderMap, Q(q): Q<Sear
     };
     let page = validate::PageQuery { limit: q.limit, offset: q.offset };
     let filter = "WHERE ($1::text IS NULL OR s.status = $1) AND ($2::uuid IS NULL OR s.batch_id = $2)
-                  AND ($3::text IS NULL OR s.code ILIKE $3 OR s.set_label ILIKE $3 OR b.batch_no ILIKE $3)";
+                  AND ($3::text IS NULL OR s.code ILIKE $3 OR s.set_label ILIKE $3 OR b.batch_no ILIKE $3)
+                  AND ($6::uuid[] IS NULL OR b.location_id = ANY($6))";
     let rows = sqlx::query_as::<_, SetRow>(&format!("{SET_SELECT} {filter} ORDER BY b.created_at DESC, s.seq ASC, s.id ASC LIMIT $4 OFFSET $5"))
-        .bind(&status).bind(q.batch_id).bind(&pat).bind(page.limit()).bind(page.offset()).fetch_all(&st.db).await?;
+        .bind(&status).bind(q.batch_id).bind(&pat).bind(page.limit()).bind(page.offset()).bind(&scope).fetch_all(&st.db).await?;
     let total: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM qr_crate_sets s JOIN production_batches b ON b.id = s.batch_id {filter}"))
-        .bind(&status).bind(q.batch_id).bind(&pat).fetch_one(&st.db).await?;
+        .bind(&status).bind(q.batch_id).bind(&pat).bind(0i64).bind(0i64).bind(&scope).fetch_one(&st.db).await?;
     let strict = st.settings.get().strict_qc_lock;
     let items: Vec<Value> = rows.iter().map(|r| set_obj(r, strict, &qr_url(&st, &headers, &r.code), None)).collect();
     Ok(Json(json!({ "items": items, "total": total })))
 }
 
-pub async fn lookup(State(st): State<AppState>, headers: HeaderMap, axum::extract::Path(code): axum::extract::Path<String>) -> AppResult<Json<Value>> {
+pub async fn lookup(State(st): State<AppState>, user: AuthUser, headers: HeaderMap, axum::extract::Path(code): axum::extract::Path<String>) -> AppResult<Json<Value>> {
     let code = code.trim().to_ascii_uppercase();
     if code.is_empty() || code.len() > 32 || !code.chars().all(|c| c.is_ascii_alphanumeric()) { return Err(AppError::not_found("QR set")); }
     let mut conn = st.db.acquire().await?;
     let row = sqlx::query_as::<_, SetRow>(&format!("{SET_SELECT} WHERE s.code = $1")).bind(&code).fetch_optional(&mut *conn).await?.ok_or_else(|| AppError::not_found("QR set"))?;
+    require_batch_location(&mut conn, &user, row.batch_id).await?;
     let strict = st.settings.get().strict_qc_lock;
     Ok(Json(set_obj(&row, strict, &qr_url(&st, &headers, &row.code), None)))
 }
 
-pub async fn qr_of(State(st): State<AppState>, headers: HeaderMap, ids: Ids) -> AppResult<Json<Value>> {
+pub async fn qr_of(State(st): State<AppState>, user: AuthUser, headers: HeaderMap, ids: Ids) -> AppResult<Json<Value>> {
     let id = *ids.0.first().ok_or_else(|| AppError::bad("Missing id"))?;
-    let code: String = sqlx::query_scalar("SELECT code FROM qr_crate_sets WHERE id = $1").bind(id).fetch_optional(&st.db).await?.ok_or_else(|| AppError::not_found("QR set"))?;
+    let (code, batch_id): (String, Uuid) = sqlx::query_as("SELECT code, batch_id FROM qr_crate_sets WHERE id = $1").bind(id).fetch_optional(&st.db).await?.ok_or_else(|| AppError::not_found("QR set"))?;
+    require_batch_location(&mut *st.db.acquire().await?, &user, batch_id).await?;
     let url = qr_url(&st, &headers, &code);
     Ok(Json(json!({ "code": code, "url": url, "svg": svg_for(&url)? })))
 }
@@ -343,7 +357,8 @@ pub async fn delete_set(State(st): State<AppState>, user: AuthUser, ids: Ids) ->
     let id = *ids.0.first().ok_or_else(|| AppError::bad("Missing id"))?;
     let mut tx = st.db.begin().await?;
     let batch: Uuid = sqlx::query_scalar("SELECT batch_id FROM qr_crate_sets WHERE id = $1").bind(id).fetch_optional(&mut *tx).await?.ok_or_else(|| AppError::not_found("QR set"))?;
-    sqlx::query("SELECT id FROM production_batches WHERE id = $1 FOR UPDATE").bind(batch).fetch_one(&mut *tx).await?;
+    let bloc: Uuid = sqlx::query_scalar("SELECT location_id FROM production_batches WHERE id = $1 FOR UPDATE").bind(batch).fetch_one(&mut *tx).await?;
+    user.require_location(bloc)?;
     let s: Option<(String, Option<Uuid>, String, i32, Option<DateTime<Utc>>)> = sqlx::query_as(
         "SELECT status, parent_set_id, set_label, original_crates, loaded_at FROM qr_crate_sets WHERE id = $1 FOR UPDATE").bind(id).fetch_optional(&mut *tx).await?;
     let (status, parent, label, crates, loaded_at) = s.ok_or_else(|| AppError::not_found("QR set"))?;
