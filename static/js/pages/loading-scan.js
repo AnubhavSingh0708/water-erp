@@ -28,7 +28,7 @@ export function printLabel(set, plant) {
 function showResidual(set, ctx) {
   const svg = svgNode(set.svg);
   const body = el('div.stack', {}, el('div.banner.warn.inline', {}, icon('alert'), el('div.grow', {}, el('b', { text: 'A new label was created for the rest' }), el('div.small', { style: { fontWeight: 500 }, text: `The label you scanned now travels with the load. Print this one and stick it on the ${set.crates} crates that stay behind.` }))),
-    el('div.label-preview', {}, svg ? el('div.qr-svg', {}, svg) : null, el('div', {}, el('b.big', { text: set.set_label }), el('div', { text: set.product_name }), el('div.small.muted', { text: `Batch ${set.batch_no} - ${crates(set.crates, set.crates_per_pallet)}` }), el('div.mono', { text: set.code }))));
+    el('div.label-preview', {}, svg ? el('div.qr-svg', {}, svg) : null, el('div', {}, el('b.big', { text: set.set_label }), el('div', { text: set.product_name }), el('div.small.muted', {}, 'Batch ', el('span.nowrap', { text: set.batch_no }), ` - ${crates(set.crates, set.crates_per_pallet)}`), el('div.mono', { text: set.code }))));
   const print = el('button.btn.primary', { type: 'button', on: { click: () => printLabel(set, ui.config.plantName) } }, el('span.btn-icon', {}, icon('print')), 'Print new label');
   const later = el('button.btn.secondary', { type: 'button', on: { click: () => dlg.close() } }, 'Later');
   const dlg = ui.openDialog({ title: `New label ${set.set_label}`, body, actions: [later, print] });
@@ -47,12 +47,12 @@ export function openScanner({ trip, ctx, code, onAdded, refresh, onClose }) {
   const startBtn = el('button.btn.primary', { type: 'button', on: { click: () => startCamera() } }, el('span.btn-icon', {}, icon('qr')), 'Start camera');
   const torchBtn = el('button.btn.secondary.sm', { type: 'button', hidden: true, 'aria-pressed': 'false', on: { click: toggleTorch } }, 'Light on/off');
   const switchBtn = el('button.btn.secondary.sm', { type: 'button', hidden: true, on: { click: switchCamera } }, icon('refresh', 'sm'), 'Other camera');
-  const manual = ui.field({ label: 'Or type the label code', name: 'qrcode', type: 'text', placeholder: 'e.g. 7K3M9Q2XAB', help: 'The 10 letters and numbers printed under the QR sticker.', maxlength: 64, autocapitalize: 'characters' });
+  const manual = ui.field({ label: 'Or type the label code', name: 'qrcode', type: 'text', placeholder: 'e.g. 7K3M9Q2XAB', maxlength: 64, autocapitalize: 'characters' });
   manual.input.addEventListener('input', () => { manual.input.value = manual.input.value.toUpperCase(); });
   const findBtn = el('button.btn.secondary', { type: 'button', on: { click: () => find(manual.get()) } }, icon('search', 'sm'), 'Find label');
   manual.input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); find(manual.get()); } });
   const result = el('div.stack.scan-result', { 'aria-live': 'polite' });
-  const body = el('div.stack', {}, frame, el('div.btn-row', {}, startBtn, torchBtn, switchBtn), camMsg, el('div.row.end', {}, el('div.grow', {}, manual.el), findBtn), result);
+  const body = el('div.stack', {}, frame, el('div.btn-row', {}, startBtn, torchBtn, switchBtn), camMsg, el('div.row.nowrap.scan-manual', {}, el('div.grow', {}, manual.el), findBtn), el('p.small.muted.scan-help', { text: 'The 10 letters and numbers printed under the QR sticker.' }), result);
   const closeBtn = el('button.btn.secondary', { type: 'button', on: { click: () => dlg.close() } }, 'Done');
   const dlg = ui.openDialog({ title: `Scan label - ${trip.vehicle_reg}`, body, actions: [closeBtn], wide: false });
   dlg.closed.then(() => { stop(); if (onClose) onClose(); });
@@ -103,22 +103,23 @@ export function openScanner({ trip, ctx, code, onAdded, refresh, onClose }) {
       const set = await api.get(`/api/qr/sets/lookup/${encodeURIComponent(c)}`);
       showSet(set);
     } catch (e) {
-      paused = false;
+      paused = false; frame.classList.remove('compact');
       if (e.status === 404) ui.mount(result, el('div.banner.err.inline', {}, icon('ban'), el('div.grow', {}, el('b', { text: `No label with code ${c}` }), el('div.small', { style: { fontWeight: 500 }, text: 'Check the code, or scan another sticker. A label deleted in QR labels no longer works.' }))));
       else { ui.clear(result); ui.toastError(e); }
     }
   }
   function showSet(set) {
-    paused = true;
+    paused = true; frame.classList.add('compact');
     const q = ui.qtyInput({ name: 'qrcrates', label: 'Crates to load from this label', cratesPerPallet: set.crates_per_pallet || 0, max: set.crates, value: String(set.crates), min: 1 });
     const split = el('div.small.muted'); const upd = () => { const n = q.value; ui.clear(split); if (n && n < set.crates) split.append(`Partial: ${crates(set.crates - n, set.crates_per_pallet)} stay on a new label that you can print.`); };
     q.input.addEventListener('input', upd);
     const add = el('button.btn.primary', { type: 'button', disabled: !set.loadable, on: { click: addIt } }, el('span.btn-icon', {}, icon('plus')), 'Add to trip');
-    const again = el('button.btn.ghost', { type: 'button', on: { click: () => { ui.clear(result); paused = false; manual.set(''); } } }, 'Scan another');
-    ui.mount(result, el('section.card.scan-set', {}, el('div.row.between', { style: { flexWrap: 'nowrap' } }, el('div.grow', {}, el('b.big', { text: `Label ${set.set_label}` }), el('div.small.muted', { text: `${set.product_name} - batch ${set.batch_no}` }), el('div.small.muted', { text: `exp ${ui.fmtDate(set.expiry_date)}` })), ui.badge(set.status)),
+    const again = el('button.btn.ghost', { type: 'button', on: { click: () => { ui.clear(result); paused = false; manual.set(''); frame.classList.remove('compact'); } } }, 'Scan another');
+    ui.mount(result, el('section.card.scan-set', {}, el('div.row.between', { style: { flexWrap: 'nowrap' } }, el('div.grow', {}, el('b.big', { text: `Label ${set.set_label}` }), el('div.small.muted', {}, `${set.product_name} - batch `, el('span.nowrap', { text: set.batch_no })), el('div.small.muted', { text: `exp ${ui.fmtDate(set.expiry_date)}` })), ui.badge(set.status)),
       el('div.row', {}, el('span', { text: 'On this label: ' }), el('b', {}, cratesNode(set.crates, set.crates_per_pallet))),
       set.loadable ? el('div.stack.tight', {}, q.el, split) : el('div.banner.warn.inline', {}, icon('lock'), el('div.grow', {}, el('b', { text: 'This label cannot be loaded' }), el('div.small', { style: { fontWeight: 500 }, text: set.loadable_reason || 'Not available' }))),
       el('div.btn-row', {}, again, set.loadable ? add : null)));
+    setTimeout(() => result.scrollIntoView({ block: 'end', behavior: 'smooth' }), 60);
     async function addIt() {
       const n = q.value; if (!n || !q.valid) { q.input.focus(); return; }
       if (set.qc_status !== 'APPROVED') { const ok = await ui.confirmDialog({ title: 'Load unapproved stock?', message: `Batch ${set.batch_no} is ${set.qc_status}.`, warnings: ['These crates would leave the plant before QC approval.'], confirmText: 'Yes, load it' }); if (!ok) return; }
@@ -126,7 +127,7 @@ export function openScanner({ trip, ctx, code, onAdded, refresh, onClose }) {
       if (res) {
         ui.toast.ok(`Label ${set.set_label} added`, { sub: `${crates(n, set.crates_per_pallet)} - ${set.product_name}` }); (res.warnings || []).forEach((w) => ui.toast.warn(w));
         if (onAdded) await onAdded(res);
-        ui.clear(result); manual.set(''); paused = false;
+        ui.clear(result); manual.set(''); paused = false; frame.classList.remove('compact');
         if (res.residual_set) showResidual(res.residual_set, ctx);
       } else { paused = false; }
     }
