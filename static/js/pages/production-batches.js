@@ -51,7 +51,7 @@ export function mountBatches(panel, ctx) {
           { label: 'Batch', cls: 'k', render: (b) => [el('b.nowrap', { text: b.batch_no }), el('small', { text: b.product_name })] },
           { label: 'QC', cls: 's', render: (b) => ui.badge(b.qc_status, b.qc_status === 'QUARANTINE' ? 'Waiting for QC' : undefined) },
           { label: 'Made', cls: 'num', render: (b) => L.cratesCell(b.crates, b.crates_per_pallet, b.kind === 'RETURNABLE' ? 'jars' : 'crates') },
-          { label: 'Date', render: (b) => `${ui.fmtDate(b.produced_on)} - ${b.shift.toLowerCase()}` }, { label: 'Expiry', hideMobile: true, render: (b) => ui.fmtDate(b.expiry_date) },
+          { label: 'Date', render: (b) => el('span.nowrap', { text: `${ui.fmtDate(b.produced_on)} - ${b.shift.toLowerCase()}` }) }, { label: 'Expiry', hideMobile: true, render: (b) => el('span.nowrap', { text: ui.fmtDate(b.expiry_date) }) },
           { label: 'Godown', hideMobile: true, render: (b) => b.location_name },
         ], rows: d.items, onRow: (b) => openBatch(b.id),
         emptyState: { icon: 'package', title: st.qc || st.q ? 'No batches match' : 'No batches yet', text: 'Press "New batch" when a filling run is done. It then waits for Lab QC to approve it.', action: st.qc || st.q ? null : { label: 'New batch', icon: 'plus', onClick: () => showForm() } },

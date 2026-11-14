@@ -36,8 +36,8 @@ function mountTransfers(panel, status) {
           columns: [
             { label: 'Transfer', cls: 'k', render: (t) => [el('b.nowrap', { text: t.tf_no }), el('small', { text: `${t.from_name} to ${t.to_name}` })] },
             { label: 'Status', cls: 's', render: (t) => [ui.badge(t.status), t.overdue ? el('div', { style: { marginTop: '4px', textAlign: 'right' } }, ui.badge('OVERDUE', 'Over 48 h')) : null] },
-            { label: 'Sent', render: (t) => [ui.fmtDate(t.created_at), el('small.block.muted', { text: ui.fmtRelative(t.created_at) })] }, { label: 'Items', cls: 'num', render: (t) => `${t.lines_count} ${Number(t.lines_count) === 1 ? 'line' : 'lines'}` },
-            { label: 'Vehicle', hideMobile: true, render: (t) => t.vehicle_no || '-' }, { label: 'Received', hideMobile: true, render: (t) => (t.received_at ? ui.fmtDateTime(t.received_at) : '-') },
+            { label: 'Sent', render: (t) => [el('span.nowrap', { text: ui.fmtDate(t.created_at) }), el('small.block.muted', { text: ui.fmtRelative(t.created_at) })] }, { label: 'Items', cls: 'num', render: (t) => `${t.lines_count} ${Number(t.lines_count) === 1 ? 'line' : 'lines'}` },
+            { label: 'Vehicle', hideMobile: true, render: (t) => el('span.nowrap', { text: t.vehicle_no || '-' }) }, { label: 'Received', hideMobile: true, render: (t) => (t.received_at ? el('span.nowrap', { text: ui.fmtDateTime(t.received_at) }) : '-') },
             { label: '', cls: 'a', render: (t) => el('div.btn-row', {}, L.btn(t.status === 'IN_TRANSIT' && mine(t.to_location_id) ? 'Open and receive' : 'Open', 'list', { kind: t.status === 'IN_TRANSIT' && mine(t.to_location_id) ? 'primary' : 'secondary', sm: true, onClick: () => openTransfer(t.id) })) },
           ], rows: d.items, onRow: (t) => openTransfer(t.id),
           emptyState: { icon: 'transfer', title: status === 'IN_TRANSIT' ? 'Nothing on the road' : 'No transfers here', text: status === 'IN_TRANSIT' ? 'Create a transfer when goods leave for another godown.' : 'Transfers appear here once they are received or cancelled.' },
