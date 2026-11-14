@@ -125,3 +125,4 @@
 .ld-notes { margin-bottom: var(--s3); }
 .av-wrap .banner { border-radius: var(--r); }
 .settle-loaded { margin-top: 4px; padding: 4px 10px; background: var(--brand-50); border-radius: var(--r-sm); display: inline-block; }
+.empty-line { padding: var(--s2) 0 var(--s3); }

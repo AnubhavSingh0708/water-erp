@@ -83,7 +83,7 @@ export async function mountTrip(host, { id, ctx }) {
     const items = trip.items || [];
     const total = items.reduce((s, i) => s + i.crates, 0);
     ui.mount(itemsBox, el('section.card', {}, el('div.card-head', {}, el('h2', {}, icon('package'), trip.status === 'LOADING' ? 'On this trip' : 'Load'), items.length ? el('span.count-pill', { text: String(items.length) }) : null),
-      items.length ? el('ul.list.items', {}, items.map(itemCard)) : ui.empty({ icon: 'package', title: 'Nothing loaded yet', text: trip.status === 'LOADING' ? 'Pick stock below and tap Load.' : '' }),
+      items.length ? el('ul.list.items', {}, items.map(itemCard)) : el('p.muted.empty-line', {}, icon('package', 'sm'), trip.status === 'LOADING' ? ' Nothing loaded yet - pick stock below and tap Load.' : ' Nothing was loaded.'),
       items.length ? el('div.item-total', {}, el('span', { text: 'Total' }), el('b', { text: `${ui.fmtNum(total, 0)} crates` })) : null,
       trip.status === 'DISPATCHED' || trip.status === 'SETTLED' ? el('div.btn-row.ld-doc-actions', {},
         el('button.btn.secondary', { type: 'button', on: { click: () => ctx.go(`gp=${trip.id}`) } }, icon('print'), 'Gate pass / print')) : null));

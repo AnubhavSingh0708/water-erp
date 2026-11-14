@@ -65,7 +65,7 @@ export async function mountDispatchNew(host, { ctx }) {
   const products = [...new Map(avail.filter((a) => a.qc_status === 'APPROVED').map((a) => [a.product_id, a])).values()];
   function buildAdder() {
     if (!products.length) { ui.mount(addBox, ui.empty({ icon: 'warehouse', title: 'No approved stock to sell', text: 'Nothing approved by QC is free in this godown right now.' })); return; }
-    const pf = ui.field({ label: 'Product', name: 'ad_product', type: 'select', options: products.map((p) => ({ value: p.product_id, label: `${p.product_name} - ${crates(freeOf(p.product_id), p.crates_per_pallet)} free` })) });
+    const pf = ui.field({ label: 'Product', name: 'ad_product', type: 'select', options: products.map((p) => ({ value: p.product_id, label: `${p.product_name} (${ui.fmtNum(freeOf(p.product_id), 0)} free)` })) });
     const bf = ui.field({ label: 'Batch', name: 'ad_batch', type: 'select', options: [], help: 'Oldest first is the safe default (FEFO).' });
     let q = null; const qbox = el('div'); const msg = el('div.ld-check', { role: 'status' });
     const addBtn = el('button.btn.secondary.block', { type: 'button', on: { click: add } }, icon('plus', 'sm'), 'Add to note');
