@@ -9,7 +9,7 @@ const A = '/api/admin';
 const MATERIAL_CATEGORIES = ['PREFORM', 'CAP', 'LABEL', 'SLEEVE', 'SHRINK_FILM', 'CARTON', 'MINERAL', 'CHEMICAL', 'EMPTY_BOTTLE', 'OTHER'];
 const EQUIPMENT_KINDS = ['RO', 'UV', 'OZONATOR', 'BLOW_MOLDER', 'FILTER', 'COMPRESSOR', 'FILLER', 'OTHER'];
 const opts = (list, label = (x) => x.replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase())) => list.map((x) => ({ value: x, label: label(x) }));
-const titled = (name, sub) => [el('b', { text: name || '-' }), sub ? el('small', { text: sub }) : null];
+const titled = (name, sub, nowrap) => [el('b', { class: nowrap ? 'nowrap' : '', text: name || '-' }), sub ? el('small', { text: sub }) : null];
 const active = (url) => `${url}?active=true`;
 
 /** document expiry badge for vehicles: worst of the four dates */
@@ -100,7 +100,7 @@ export const SCHEMAS = {
   vehicles: {
     title: 'Vehicles', singular: 'vehicle', endpoint: `${A}/vehicles`, icon: 'truck', wide: true,
     columns: [
-      { label: 'Vehicle', cls: 'k', render: (r) => titled(r.reg_no, r.name) }, { label: 'Capacity', cls: 'num', render: (r) => `${ui.fmtNum(r.capacity_crates, 0)} crates` },
+      { label: 'Vehicle', cls: 'k', render: (r) => titled(r.reg_no, r.name, true) }, { label: 'Capacity', cls: 'num', render: (r) => `${ui.fmtNum(r.capacity_crates, 0)} crates` },
       { label: 'Driver', render: (r) => [r.driver_name, r.driver_phone].filter(Boolean).join(' - ') }, { label: 'Documents', cls: 'w', render: docBadge },
     ],
     fields: [

@@ -202,5 +202,10 @@ PUT bodies contain **only changed fields** (backend PUT is partial + strict: nev
 7. Timestamps from the API are UTC ISO; format with `fmtDateTime` (plant time). Dates `YYYY-MM-DD` are plain dates (`fmtDate`).
 8. One `<h1>` per page = the app-bar title (`boot({title})`). Page content starts with `.page-head` (subtitle + actions) or directly with cards.
 
+## 10b. Page-specific CSS
+Shared components live in `css/styles.css` (owned by D - ask via the Lead for shared changes; additions are welcome, renames are not). Page-only styles go in `static/css/pages/<page>.css`,
+linked **after** `styles.css` in the page's `<head>`: `<link rel="stylesheet" href="/css/pages/loading.css">`. Use the design tokens (`var(--brand-600)`, `var(--s4)`, `var(--r)`, `var(--shadow)`), keep >= 44 px targets, and put mobile rules first (min-width media queries at 768/1024).
+Identifiers that must not wrap in a card title (registration numbers, batch numbers): `el('b.nowrap', ...)`.
+
 ## 11. Testing a page (what D verified, copy for yours)
 Playwright (`chromium.launch()`), 390x844 and 1280x800: no horizontal overflow (`document.documentElement.scrollWidth <= innerWidth`), zero console errors / CSP violations / failed requests, visible controls >= 44x44, inputs >= 16 px, no `[onclick]`/inline scripts. Log in at **`http://localhost:<port>`** (not `127.0.0.1` - the `Secure` cookie needs a secure context).
