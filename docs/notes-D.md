@@ -6,7 +6,7 @@ Usage for other page authors: `docs/FRONTEND_GUIDE.md`.
 
 ## Deviations / decisions
 * **Brand**: Neersagar (titles `Neersagar ERP – <Page>`, logomark `icons.svg#neersagar`, wordmark). `ui.printHeader()` added for printable documents.
-* **Login 401**: `api.js` never redirects on the login call (`noAuthRedirect`), and treats `429 LOCKED` as non-retryable. `409 IN_PROGRESS` IS retried (same key) because a killed server leaves the key pending for 35 s.
+* **Login 401**: `api.js` never redirects on the login call (`noAuthRedirect`), and treats `429 LOCKED` as non-retryable. `409 IN_PROGRESS` IS retried (same key) because a killed server leaves the key pending (10 minutes since W1; the UI should stop retrying after its back-off and tell the user to check the list).
 * **Idempotency**: keys also on PUT/DELETE; `api.action()` regenerates the key only when the body changes (ignoring `confirm`) or after success. Dry runs carry no key (server ignores it).
 * **Dashboard** follows the REAL `/api/dashboard` (not only section 4): `kpis.*` may be `null` (page not permitted -> tile hidden), plus `by_location`, `in_transit_warnings`, `kpis.in_transit_transfers`. 404/unavailable -> "not ready" empty state.
 * **Admin users**: `allowed_pages` checklist excludes `admin` (backend rejects it; admin = `is_admin` toggle). Godown restriction = `allowed_location_ids` checklist (none ticked = all). Master-data PUTs send only changed fields; nullable cleared fields send `null`, hidden dependent fields (e.g. preform on a RETURNABLE product) are nulled.

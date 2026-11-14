@@ -33,6 +33,8 @@ use uuid::Uuid;
 
 pub const CHANNEL: &str = "erp_events";
 const DEBOUNCE: Duration = Duration::from_millis(150);
+/// SSE comment ping interval. Every ping is a write: a dead peer behind a reset/closed route fails it and the stream (and its per-user slot) is dropped.
+pub const PING_SECS: u64 = 15;
 const MAX_STREAMS_PER_USER: usize = 8;
 const MAX_STREAMS_TOTAL: usize = 500;
 
@@ -259,7 +261,7 @@ pub async fn stream_handler(State(state): State<AppState>, user: AuthUser, Query
             }
         }
     }));
-    let mut resp = Sse::new(s).keep_alive(KeepAlive::new().interval(Duration::from_secs(20)).text("ping")).into_response();
+    let mut resp = Sse::new(s).keep_alive(KeepAlive::new().interval(Duration::from_secs(PING_SECS)).text("ping")).into_response();
     let h = resp.headers_mut();
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache, no-transform"));
     h.insert("x-accel-buffering", HeaderValue::from_static("no"));
