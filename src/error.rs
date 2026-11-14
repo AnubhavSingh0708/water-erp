@@ -61,6 +61,8 @@ impl From<sqlx::Error> for AppError {
                 Some("23503") => return AppError::conflict("IN_USE", "Record is referenced by other data or the referenced record does not exist"),
                 Some("23514") => return AppError::BadRequest(format!("Value rejected by rule ({})", db.constraint().unwrap_or("check"))),
                 Some("23502") => return AppError::BadRequest("A required value is missing".into()),
+                // numeric field overflow (NUMERIC(18,4) / INT): a client-side range problem, never a 500
+                Some("22003") => return AppError::BadRequest("A number is out of the allowed range".into()),
                 Some("40P01") | Some("40001") => return AppError::conflict("RETRY", "Concurrent update, please retry"),
                 _ => {}
             }
