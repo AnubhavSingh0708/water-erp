@@ -51,6 +51,8 @@ export function mountActions(panel, ctx) {
   ctx.refreshers.actions = async () => { if (view === 'home') await loadLists(); };
   ERP.godown.onChange(() => { if (view !== 'count') home(); else home(); });
 
+  /* someone else used the stock meanwhile: show the real balance again so the next try is based on it */
+  const staleStock = (picker) => (e) => { if (e && (e.code === 'INSUFFICIENT_STOCK' || e.code === 'RESERVED_STOCK' || e.code === 'INVALID_STATE')) picker.refreshLots(); };
   /* ------------------------------------------------------------------------------------------ adjust */
   const zoneName = (g) => `${L.zoneLabel(g.zone)}${ERP.godown.multiple ? ` / ${ERP.godown.currentName()}` : ''}`;
   /** Review sheet rows: the lot (before -> after) AND the item total in that zone (before -> after). */
@@ -94,7 +96,7 @@ export function mountActions(panel, ctx) {
       if (reason.get().trim().length < 5) { reason.setError('Please explain (at least 5 letters)'); bad = true; } else reason.setError('');
       if (bad) { form.querySelector('.has-error input, .has-error select, .has-error textarea')?.focus(); return; }
       const body = { ...withLoc(), item_type: g.item_type, item_id: g.item_id, zone: g.zone, ...(g.lot_id ? { lot_id: g.lot_id } : {}), delta: `${dir.value === 'remove' ? '-' : ''}${q.get().trim()}`, reason: reason.get().trim(), reason_code: code.get() };
-      const r = await L.submitDocument({ flow, form, button: submit, path: '/api/warehouse/adjustments', body, title: 'Review adjustment', confirmText: 'Save adjustment', decorate: (fx) => adjustEffects(fx, g, zoneName(g)), summary: 'Adjustments are permanent entries in the stock ledger - they are corrected with another entry, never deleted.' });
+      const r = await L.submitDocument({ flow, form, button: submit, path: '/api/warehouse/adjustments', body, onError: staleStock(picker), title: 'Review adjustment', confirmText: 'Save adjustment', decorate: (fx) => adjustEffects(fx, g, zoneName(g)), summary: 'Adjustments are permanent entries in the stock ledger - they are corrected with another entry, never deleted.' });
       if (r) { ui.toast.ok(`${r.item}: balance is now ${ui.fmtNum(r.balance_after, 4)}`); (r.warnings || []).forEach((w) => ui.toast.warn(w)); home(); }
     }));
     formView('Adjust stock', form, submit, 'Use this to correct the system after a count or when an entry was wrong. Stock held by QC cannot be adjusted here.');
@@ -127,7 +129,7 @@ export function mountActions(panel, ctx) {
       if (to.get() === 'SCRAP_YARD' && note.get().trim().length < 5) { note.setError('Say why it goes to scrap (at least 5 letters)'); bad = true; } else note.setError('');
       if (bad) { form.querySelector('.has-error input, .has-error select, .has-error textarea')?.focus(); return; }
       const body = { ...withLoc(), item_type: g.item_type, item_id: g.item_id, ...(g.lot_id ? { lot_id: g.lot_id } : {}), from_zone: g.zone, to_zone: to.get(), qty: q.get().trim(), ...(note.get().trim() ? { note: note.get().trim() } : {}) };
-      const r = await L.submitDocument({ flow, form, button: submit, path: '/api/warehouse/transfers', body, title: 'Review move', confirmText: 'Move stock', danger: to.get() === 'SCRAP_YARD' });
+      const r = await L.submitDocument({ flow, form, button: submit, path: '/api/warehouse/transfers', body, onError: staleStock(picker), title: 'Review move', confirmText: 'Move stock', danger: to.get() === 'SCRAP_YARD' });
       if (r) { ui.toast.ok(`Moved ${ui.fmtNum(r.qty, 4)} of ${r.item} to ${L.zoneLabel(r.to_zone)}`); home(); }
     }));
     formView('Move between zones', form, submit, 'Raw materials can move between the raw store and the blow floor. Anything can be moved to the scrap yard with a reason.');
@@ -169,7 +171,7 @@ export function mountActions(panel, ctx) {
       if (note.get().trim().length < 5) { note.setError('Please explain (at least 5 letters)'); bad = true; } else note.setError('');
       if (bad) { form.querySelector('.has-error input, .has-error select, .has-error textarea')?.focus(); return; }
       const body = { ...withLoc(), item_type: g.item_type, item_id: g.item_id, zone: g.zone, ...(g.lot_id ? { lot_id: g.lot_id } : {}), qty: q.get().trim(), reason_code: code.get(), note: note.get().trim(), ...(disp.checked ? { dispose: true } : {}) };
-      const r = await L.submitDocument({ flow, form, button: submit, path: '/api/warehouse/write-offs', body, title: 'Review write-off', confirmText: 'Write off - cannot be undone', danger: true, summary: 'Written-off stock cannot be brought back. Check the item, lot and quantity.' });
+      const r = await L.submitDocument({ flow, form, button: submit, path: '/api/warehouse/write-offs', body, onError: staleStock(picker), title: 'Review write-off', confirmText: 'Write off - cannot be undone', danger: true, summary: 'Written-off stock cannot be brought back. Check the item, lot and quantity.' });
       if (r) { ui.toast.ok(`Written off - ${r.wo_no}`); home(); showVoucher(r); }
     }));
     formView('Write off / destroy stock', form, submit, 'Use this for broken, expired, contaminated, spilled or lost goods. A voucher is created that you can print.');

@@ -402,7 +402,7 @@ export function stockPicker({ locationId, zones, mode = 'existing', onChange, na
   [zoneF, itemF, lotF].forEach((f) => { f.input.dataset.nodraft = '1'; });
   const info = el('div.pick-info', { 'aria-live': 'polite' });
   const root = el('div.stack.tight.picker', {}, zoneF.el, itemF.el, lotF.el, info);
-  let items = []; let lots = []; let seq = 0; let adding = mode === 'adjust'; let hereLots = []; let candidates = []; let itemNote = '';
+  let items = []; let lots = []; let seq = 0; let adding = mode === 'adjust'; let keepLot = ''; let hereLots = []; let candidates = []; let itemNote = '';
   const fire = () => { if (onChange) onChange(get()); };
   const itemKey = (x) => `${x.item_type}:${x.item_id}`;
   function setOptions(f, options, value) {
@@ -468,7 +468,7 @@ export function stockPicker({ locationId, zones, mode = 'existing', onChange, na
   }
   function buildLots() {
     const it = items.find((x) => itemKey(x) === itemF.get()); const zone = zoneF.get(); if (!it) return;
-    const prev = lotF.get();
+    const prev = keepLot || lotF.get(); keepLot = '';
     lots = [...hereLots]; if (mode === 'adjust' && adding) lots.push(...candidates);
     const opts = lots.map((l) => ({ value: l.lot_id || 'none', label: lotLabel(l, it) }));
     const jarNil = it.item_type === 'PRODUCT' && (zone === 'JAR_EMPTY' || zone === 'JAR_CLEAN');
@@ -521,7 +521,7 @@ export function stockPicker({ locationId, zones, mode = 'existing', onChange, na
   lotF.input.addEventListener('change', () => { lotF.setError(''); paint(); fire(); });
   loadItems();
   const setAdding = (v) => { v = !!v; if (v === adding) return; adding = v; if (itemF.get()) { buildLots(); paint(); fire(); } };
-  return { el: root, get, reload: loadItems, setAdding, flagMissing, zoneInput: zoneF.input, fields: { zoneF, itemF, lotF } };
+  return { el: root, get, reload: loadItems, refreshLots: () => { keepLot = lotF.get(); return loadLots(); }, setAdding, flagMissing, zoneInput: zoneF.input, fields: { zoneF, itemF, lotF } };
 }
 
 /* ------------------------------------------------------------------------------------------------ mini bar chart (CSS only) */
