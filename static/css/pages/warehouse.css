@@ -182,3 +182,7 @@ details.collapse > summary > .row .i { color: var(--brand-600); }
 @media (max-width: 767.98px) { .action-bar .btn:only-child { flex: 1 1 auto; } }
 @media (min-width: 768px) { .tbl td.w { min-width: 13rem; } }
 @media (min-width: 768px) { .filters.grid2 .field { flex: 1 1 10rem; max-width: 16rem; } }
+/* safety net: an absurdly long identifier is cut with an ellipsis instead of widening the page */
+@media (max-width: 767.98px) { .table-cards td.k > b.nowrap { display: block; overflow: hidden; text-overflow: ellipsis; } }
+.id-head > div { min-width: 0; max-width: 100%; }
+.id-head h2 { overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
