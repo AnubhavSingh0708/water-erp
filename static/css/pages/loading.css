@@ -92,7 +92,6 @@
 .sign-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: var(--s5); margin-top: var(--s6); }
 .sign-line { height: 44px; border-bottom: 1.5px solid var(--ink); }
 .sign-name { font-size: var(--fs-sm); font-weight: 700; color: var(--ink-2); padding-top: 4px; text-align: center; }
-@page thermal { size: 80mm auto; margin: 3mm; }
 .label-print-root { display: none; }
 .label-preview { display: grid; grid-template-columns: 9rem 1fr; gap: var(--s4); align-items: center; }
 @media print {
@@ -100,7 +99,7 @@
   .gp-doc { border: 0; box-shadow: none; padding: 0; }
   .gp-doc .kv { grid-template-columns: 9rem 1fr; }
   .gp-totals { background: #fff; border-color: #000; }
-  .gp-doc.print-thermal { page: thermal; width: 74mm; font-size: 9pt; }
+  .gp-doc.print-thermal { width: 74mm; font-size: 9pt; }
   .gp-doc.print-thermal .gp-totals { grid-template-columns: 1fr 1fr 1fr; gap: 2px; padding: 4px; }
   .gp-doc.print-thermal .gp-title h2 { font-size: 12pt; }
   .gp-doc.print-thermal .sign-row { gap: 10px; margin-top: 12px; }
@@ -125,3 +124,4 @@
 .ld-notes { margin-bottom: var(--s3); }
 .av-wrap .banner { border-radius: var(--r); }
 .settle-loaded { margin-top: 4px; padding: 4px 10px; background: var(--brand-50); border-radius: var(--r-sm); display: inline-block; }
+.empty-line { padding: var(--s2) 0 var(--s3); }

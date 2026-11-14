@@ -2,7 +2,7 @@
 import { boot, ERP } from '/js/shell.js';
 import { api } from '/js/api.js';
 import * as ui from '/js/ui.js';
-import { run, dueText, daysBetween } from '/js/pages/loading-common.js';
+import { run, dueText, daysBetween, actionFor } from '/js/pages/loading-common.js';
 
 const { el, icon } = ui;
 await boot({ page: 'maintenance', title: 'Maintenance' });
@@ -104,7 +104,7 @@ function docTile(d, label) {
 /* ---------------------------------------------------------------------------------------------- complete a task */
 function openComplete(s) {
   const today = ui.todayPlant();
-  const act = api.action();
+  const act = actionFor(`mt:${s.id}`);
   const nextFor = (done) => (s.interval_days && done ? ui.addDays(done, s.interval_days) : '');
   const done = ui.field({ label: 'Done on', name: 'done_on', type: 'date', value: today, required: true, help: 'Cannot be in the future.' });
   done.input.max = today;

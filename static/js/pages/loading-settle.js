@@ -3,7 +3,7 @@
 import { api } from '/js/api.js';
 import * as ui from '/js/ui.js';
 import { ERP } from '/js/shell.js';
-import { el, icon, cratesNode, crates, run, explain, dryRunReview } from '/js/pages/loading-common.js';
+import { el, icon, cratesNode, crates, run, explain, dryRunReview, actionFor } from '/js/pages/loading-common.js';
 
 const int = (v) => { const n = ui.toNum(v); return Number.isFinite(n) && n >= 0 && Number.isInteger(n) ? n : null; };
 
@@ -128,7 +128,7 @@ export async function mountSettle(host, { id, ctx }) {
   host.append(el('div.action-bar', {}, noteEl, submitBtn));
   update();
 
-  const act = api.action();
+  const act = actionFor(`settle:${id}`);
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault(); ui.clearFormError(form);
     const body = { items: rows.map((r) => { const v = vals(r); return { item_id: r.it.id, delivered: v.d, returned: v.r, damaged: v.x }; }) };

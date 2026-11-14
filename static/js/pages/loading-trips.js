@@ -2,7 +2,7 @@
 // gate pass (dry-run review -> confirm), cancel, void, on-the-road / settled / cancelled summaries.
 import { api } from '/js/api.js';
 import * as ui from '/js/ui.js';
-import { el, icon, cratesNode, crates, capacityBar, run, explain, dryRunReview, getVehicles, daysBetween } from '/js/pages/loading-common.js';
+import { el, icon, cratesNode, crates, capacityBar, run, explain, dryRunReview, getVehicles, daysBetween, actionFor } from '/js/pages/loading-common.js';
 
 const DOCS = [['insurance_expiry', 'Insurance'], ['fitness_expiry', 'Fitness'], ['puc_expiry', 'PUC'], ['permit_expiry', 'Permit']];
 
@@ -83,7 +83,7 @@ export async function mountTrip(host, { id, ctx }) {
     const items = trip.items || [];
     const total = items.reduce((s, i) => s + i.crates, 0);
     ui.mount(itemsBox, el('section.card', {}, el('div.card-head', {}, el('h2', {}, icon('package'), trip.status === 'LOADING' ? 'On this trip' : 'Load'), items.length ? el('span.count-pill', { text: String(items.length) }) : null),
-      items.length ? el('ul.list.items', {}, items.map(itemCard)) : ui.empty({ icon: 'package', title: 'Nothing loaded yet', text: trip.status === 'LOADING' ? 'Pick stock below and tap Load.' : '' }),
+      items.length ? el('ul.list.items', {}, items.map(itemCard)) : el('p.muted.empty-line', {}, icon('package', 'sm'), trip.status === 'LOADING' ? ' Nothing loaded yet - pick stock below and tap Load.' : ' Nothing was loaded.'),
       items.length ? el('div.item-total', {}, el('span', { text: 'Total' }), el('b', { text: `${ui.fmtNum(total, 0)} crates` })) : null,
       trip.status === 'DISPATCHED' || trip.status === 'SETTLED' ? el('div.btn-row.ld-doc-actions', {},
         el('button.btn.secondary', { type: 'button', on: { click: () => ctx.go(`gp=${trip.id}`) } }, icon('print'), 'Gate pass / print')) : null));
@@ -117,7 +117,7 @@ export async function mountTrip(host, { id, ctx }) {
   }
 
   function openLoad(batchId) {
-    const act = api.action();
+    const act = actionFor(`trip:${id}`);
     const row = () => avail.find((a) => a.batch_id === batchId);
     const r0 = row(); if (!r0) { ui.toast.warn('That batch is no longer available'); return; }
     const cpp = r0.crates_per_pallet || 0;
@@ -185,7 +185,7 @@ export async function mountTrip(host, { id, ctx }) {
   async function removeItem(it) {
     const ok = await ui.confirmDialog({ title: 'Remove from trip?', message: `${crates(it.crates, it.crates_per_pallet)} of ${it.product_name} (${it.batch_no}) go back to free stock.`, confirmText: 'Yes, remove', cancelText: 'Keep it' });
     if (!ok) return;
-    const act = api.action();
+    const act = actionFor(`trip:${id}`);
     const t = await run(null, () => act.del(`/api/loading/trips/${encodeURIComponent(id)}/items/${encodeURIComponent(it.id)}`), { refresh: () => refresh(false) });
     if (t) { trip = t; await loadAvail(false).catch(() => {}); renderAll(); ui.toast.ok('Removed from the trip'); }
   }
@@ -203,7 +203,7 @@ export async function mountTrip(host, { id, ctx }) {
     }
   }
 
-  const gpAct = api.action();
+  const gpAct = actionFor(`trip:${id}`);
   async function issue(btn) {
     if (!trip.items || !trip.items.length) return;
     const before = el('div.stack.tight', {},
@@ -225,14 +225,14 @@ export async function mountTrip(host, { id, ctx }) {
   async function cancelTrip() {
     const reason = await ui.promptDialog({ title: `Cancel trip ${trip.trip_no}?`, label: 'Reason (optional)', help: 'All crates on this trip go back to free stock.', confirmText: 'Cancel trip', danger: true, min: 0 });
     if (reason === null) return;
-    const act = api.action();
+    const act = actionFor(`trip:${id}`);
     const t = await run(null, () => act.post(`/api/loading/trips/${encodeURIComponent(id)}/cancel`, { reason }), { refresh: () => refresh(false) });
     if (t) { ui.toast.ok(`Trip ${t.trip_no} cancelled`); ctx.go('trips'); }
   }
   async function voidPass() {
     const reason = await ui.promptDialog({ title: `Void gate pass ${trip.gate_pass_no || ''}?`, label: 'Why is it being voided?', help: 'Wrong load, or the vehicle never left. At least 5 characters.', min: 5, danger: true, confirmText: 'Continue' });
     if (!reason) return;
-    const act = api.action();
+    const act = actionFor(`trip:${id}`);
     const t = await run(null, () => act.postConfirm(`/api/loading/trips/${encodeURIComponent(id)}/void`, { reason }, { danger: true, confirmTitle: 'Void this gate pass?', confirmText: 'Yes, void it' }), { refresh: () => refresh(false) });
     if (t) { ui.toast.ok('Gate pass voided', { sub: 'The crates are back in stock.' }); trip = t; await refresh(true); }
   }

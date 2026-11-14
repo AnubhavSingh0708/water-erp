@@ -2,7 +2,7 @@
 import { api } from '/js/api.js';
 import * as ui from '/js/ui.js';
 import { ERP } from '/js/shell.js';
-import { el, icon, cratesNode, crates, kv, run, explain, dryRunReview } from '/js/pages/loading-common.js';
+import { el, icon, cratesNode, crates, kv, run, explain, dryRunReview, actionFor } from '/js/pages/loading-common.js';
 import { docFrame, signatures } from '/js/pages/loading-gate.js';
 
 /* ---------------------------------------------------------------------------------------------- list */
@@ -65,7 +65,7 @@ export async function mountDispatchNew(host, { ctx }) {
   const products = [...new Map(avail.filter((a) => a.qc_status === 'APPROVED').map((a) => [a.product_id, a])).values()];
   function buildAdder() {
     if (!products.length) { ui.mount(addBox, ui.empty({ icon: 'warehouse', title: 'No approved stock to sell', text: 'Nothing approved by QC is free in this godown right now.' })); return; }
-    const pf = ui.field({ label: 'Product', name: 'ad_product', type: 'select', options: products.map((p) => ({ value: p.product_id, label: `${p.product_name} - ${crates(freeOf(p.product_id), p.crates_per_pallet)} free` })) });
+    const pf = ui.field({ label: 'Product', name: 'ad_product', type: 'select', options: products.map((p) => ({ value: p.product_id, label: `${p.product_name} (${ui.fmtNum(freeOf(p.product_id), 0)} free)` })) });
     const bf = ui.field({ label: 'Batch', name: 'ad_batch', type: 'select', options: [], help: 'Oldest first is the safe default (FEFO).' });
     let q = null; const qbox = el('div'); const msg = el('div.ld-check', { role: 'status' });
     const addBtn = el('button.btn.secondary.block', { type: 'button', on: { click: add } }, icon('plus', 'sm'), 'Add to note');
@@ -110,7 +110,7 @@ export async function mountDispatchNew(host, { ctx }) {
   submit = el('button.btn.primary', { type: 'submit', form: 'dn-form' }, el('span.btn-icon', {}, icon('clipboard')), 'Review and issue');
   host.append(el('div.action-bar', {}, noteEl, submit)); paintLines();
 
-  const act = api.action();
+  const act = actionFor('dn-new');
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault(); ui.clearFormError(form);
     if (!cust.get() && !party.get().trim()) { party.setError('Type who is collecting the goods, or choose a customer'); party.input.focus(); return; }
@@ -155,7 +155,7 @@ export async function mountDispatchDoc(host, { id, ctx }) {
   async function voidNote(d) {
     const reason = await ui.promptDialog({ title: `Void ${d.dn_no}?`, label: 'Why is it being voided?', help: `${ui.fmtNum(d.total_crates, 0)} crates go back into stock (same batches). At least 5 characters.`, min: 5, danger: true, confirmText: 'Void note' });
     if (!reason) return;
-    const act = api.action();
+    const act = actionFor(`dn:${id}`);
     const r = await run(null, () => act.post(`/api/loading/dispatches/${encodeURIComponent(id)}/void`, { reason }), { refresh: render });
     if (r) { ui.toast.ok(`${d.dn_no} voided`, { sub: 'The crates are back in stock.' }); await render(); }
   }
