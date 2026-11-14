@@ -223,7 +223,7 @@ export function mountActions(panel, ctx) {
           const v = Number(t) - ui.toNum(l.expected_qty);
           if (v === 0) { chipHost.append(el('span.chip-s.ok', {}, icon('check-circle', 'sm'), 'Matches the system')); ntWrap.hidden = nt.value === ''; return; }
           const e = ui.toNum(l.expected_qty); row.large = e <= 0 || Math.abs(v) * 100 > e * pct;
-          chipHost.append(el('span.chip-s', { class: row.large ? 'bad' : 'warn' }, icon('alert', 'sm'), `${v > 0 ? '+' : ''}${ui.fmtNum(v, 4)}${e > 0 ? ` (${ui.fmtNum((v / e) * 100, 1)} %)` : ''}`), row.large ? el('span.small', { text: 'Large difference - re-count, then add a note.' }) : null);
+          chipHost.append(el('span.chip-s', { class: row.large ? 'bad' : 'warn' }, icon('alert', 'sm'), `${v > 0 ? '+' : ''}${ui.fmtNum(v, 4)}${e > 0 ? ` (${ui.fmtNum((v / e) * 100, 1)} %)` : ''}`), ...(row.large ? [el('span.small', { text: 'Large difference - re-count, then add a note.' })] : []));
           ntWrap.hidden = false; ntWrap.querySelector('label').textContent = row.large ? 'Note for the difference (required)' : 'Note for the difference';
         } };
       inp.addEventListener('input', () => { row.calc(); progress(); }); nt.addEventListener('input', () => { ntWrap.classList.remove('has-error'); });

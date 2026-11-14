@@ -186,3 +186,6 @@ details.collapse > summary > .row .i { color: var(--brand-600); }
 @media (max-width: 767.98px) { .table-cards td.k > b.nowrap { display: block; overflow: hidden; text-overflow: ellipsis; } }
 .id-head > div { min-width: 0; max-width: 100%; }
 .id-head h2 { overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+/* a field that gets focus (e.g. the first error) must land below the sticky tabs and above the sticky action bar */
+html { scroll-padding-top: calc(var(--appbar-h) + var(--safe-t) + 72px); scroll-padding-bottom: 8.5rem; }
+@media (min-width: 1024px) { html { scroll-padding-top: calc(var(--appbar-h) + var(--safe-t) + 72px); scroll-padding-bottom: 6rem; } }

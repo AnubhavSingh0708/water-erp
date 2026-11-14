@@ -91,7 +91,7 @@ export function mountBlow(panel, ctx) {
       const kg = pre && pre.unit_weight_g ? (scrap * ui.toNum(pre.unit_weight_g)) / 1000 : null;
       scrapBox.classList.add(pct > warnPct ? 'warn' : 'ok');
       scrapBox.append(icon(pct > warnPct ? 'alert' : 'check-circle', 'sm'), `Scrap: ${ui.fmtNum(scrap, 0)} pcs = ${ui.fmtNum(pct, 2)} %${kg !== null ? ` (${ui.fmtNum(kg, 2)} kg)` : ''}`,
-        pct > warnPct ? el('span', { text: ` - above the ${warnPct} % limit: please write a note below.` }) : null);
+        ...(pct > warnPct ? [el('span', { text: ` - above the ${warnPct} % limit: please write a note below.` })] : []));
       notes.el.querySelector('label').firstChild.textContent = pct > warnPct ? 'Note (required for high scrap)' : 'Note';
     }
     [issued.input, good.input, preSel.input].forEach((x) => x.addEventListener('input', calc));
