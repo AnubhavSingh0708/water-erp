@@ -28,16 +28,21 @@ const batchIdFromHash = () => { const m = /batch=([0-9a-f-]{36})/i.exec(location
  * shows labelled / unlabelled crates). Older servers answer 404 -> fallback: production page list -> loading availability -> batches that already have sets.
  */
 const can = (pg) => ERP.me.is_admin || (ERP.me.allowed_pages || []).includes(pg);
-let qrListOk = true;                                    // flips to false (for the page's life) when the endpoint does not exist
+const ssGet = (k) => { try { return sessionStorage.getItem(k); } catch { return null; } };
+const ssSet = (k, v) => { try { sessionStorage.setItem(k, v); } catch { /* ignore */ } };
+let qrListOk = ssGet('qr.list404') !== '1';             // flips to false (remembered for this browser session) when the endpoint does not exist
+let listSeq = 0;                                        // an older (slower) search response must never overwrite a newer one
 async function loadBatches() {
+  const mine = ++listSeq;
   if (qrListOk) {
     try {
       const r = await api.get('/api/qr/batches', { q: S.q, limit });
+      if (mine !== listSeq) return;
       const items = Array.isArray(r) ? r : (r && r.items) || [];
       S.source = 'qr'; S.total = Array.isArray(r) ? items.length : (r && r.total) || items.length;
       S.batches = items.map((b) => ({ id: b.id, batch_no: b.batch_no, product_name: b.product_name, qc_status: b.qc_status, crates: b.crates, expiry_date: b.expiry_date, ...(b.crates_per_pallet !== undefined ? { cpp: b.crates_per_pallet } : {}), location_name: b.location_name, allocated: b.allocated_crates, free: b.free_crates }));
       return;
-    } catch (e) { if (e.status === 404 || e.status === 405) qrListOk = false; else throw e; }
+    } catch (e) { if (e.status === 404 || e.status === 405) { qrListOk = false; ssSet('qr.list404', '1'); } else throw e; }
   }
   S.total = null;
   if (can('production')) try { const r = await api.get('/api/production/batches', { limit }); S.source = 'production'; S.batches = (r.items || []).map((b) => ({ id: b.id, batch_no: b.batch_no, product_name: b.product_name, qc_status: b.qc_status, crates: b.crates, expiry_date: b.expiry_date, cpp: b.crates_per_pallet, produced_on: b.produced_on })); return; }
