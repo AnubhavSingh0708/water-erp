@@ -41,7 +41,7 @@ async fn main() -> anyhow::Result<()> {
 
     if cfg.insecure_http {
         tracing::warn!("serving PLAIN HTTP on {} (insecure-http)", cfg.bind);
-        let l = tokio::net::TcpListener::bind(cfg.bind).await?;
+        let l = server::bind_listener(cfg.bind).with_context(|| format!("binding {}", cfg.bind))?;
         let sd = shutdown.clone();
         axum::serve(l, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(async move { sd.wait().await }).await?;
     } else {
@@ -50,7 +50,8 @@ async fn main() -> anyhow::Result<()> {
         let handle = axum_server::Handle::new();
         let (h, sd) = (handle.clone(), shutdown.clone());
         tokio::spawn(async move { sd.wait().await; h.graceful_shutdown(Some(std::time::Duration::from_secs(25))); });
-        let mut server = axum_server::bind_rustls(cfg.bind, rustls_cfg).handle(handle);
+        let std_listener = server::bind_listener(cfg.bind).with_context(|| format!("binding {}", cfg.bind))?.into_std()?;
+        let mut server = axum_server::from_tcp_rustls(std_listener, rustls_cfg).handle(handle);
         // slow-loris defence: a client must finish its request headers within 10 s; HTTP/2 idle peers are probed and dropped
         {
             use hyper_util::rt::TokioTimer;
