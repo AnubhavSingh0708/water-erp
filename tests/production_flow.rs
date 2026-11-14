@@ -30,7 +30,8 @@ async fn bom_math_per_crate_and_per_1000l_and_shortage_listing(pool: PgPool) {
     let (s, b) = c.post("/api/production/batches", json!({ "product_id": p.p500, "crates": 10, "shift": "DAY" })).await;
     assert_eq!(s, 201, "{b}");
     let bid = uid(&b["id"]);
-    assert!(b["batch_no"].as_str().unwrap().starts_with("PLT1-B-"));
+    let plant_code: String = sqlx::query_scalar("SELECT value #>> '{}' FROM system_settings WHERE key='plant.code'").fetch_one(&pool).await.unwrap();
+    assert!(b["batch_no"].as_str().unwrap().starts_with(&format!("{plant_code}-B-")), "{}", b["batch_no"]);
     assert_eq!(b["qc_status"], "QUARANTINE");
     assert_eq!(dv(&b["litres"]), d("120"));
     assert_eq!(qty(&pool, "RAW", p.cap, "RM_STORE").await, d("99760"));
