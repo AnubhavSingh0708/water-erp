@@ -194,3 +194,8 @@ export const opts = (rows, value = (r) => r.id, label = (r) => r.name, first) =>
 
 /** Debounced "live refresh while a dialog is open" guard: true when any modal dialog is open. */
 export const modalOpen = () => !!document.querySelector('dialog[open]');
+
+/** Vehicles (ref data) cached for the page; `force` re-fetches. */
+let vehicleCache = null;
+export async function getVehicles(force = false) { if (!vehicleCache || force) vehicleCache = await api.get('/api/ref/vehicles'); return vehicleCache; }
+export const clearVehicles = () => { vehicleCache = null; };
