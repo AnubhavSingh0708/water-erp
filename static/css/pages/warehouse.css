@@ -125,3 +125,43 @@ button.stat:hover { border-color: var(--brand-300); box-shadow: var(--shadow); }
   body.printing dl.kv dt, body.printing dl.kv dd { color: #000; }
   body.printing .no-print { display: none !important; }
 }
+
+/* ---------------------------------------------------------------- polish (W2b) */
+/* tabs: all of them fit on a 360 px phone (icons only from 480 px up) */
+@media (max-width: 479.98px) {
+  .tabbed .tabs [role="tab"] { padding: 0 11px; gap: 4px; font-size: .93rem; }
+  .tabbed .tabs [role="tab"] > .i { display: none; }
+}
+/* cards on phones: key column a little wider than the status chip; identifiers never break at their hyphens */
+@media (max-width: 767.98px) {
+  .table-cards tr:has(> td.s) { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); }
+  .table-cards td.k b.nowrap { overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+}
+@media (max-width: 400px) {
+  .table-cards tr:has(> td.k > b.nowrap) > td.s { grid-column: 1 / -1; grid-row: 2; justify-self: start; }
+}
+/* a table card inside a card: flat divider rows instead of a card in a card */
+.inset { padding: 0 var(--s4) var(--s3); overflow-x: auto; }
+@media (max-width: 767.98px) {
+  .inset .table-cards tbody { gap: 0; }
+  .inset .table-cards tr { border: 0; border-top: 1px solid var(--line); border-radius: 0; box-shadow: none; background: transparent; padding: var(--s3) 0; }
+  .inset .table-cards tbody tr:first-child { border-top: 0; padding-top: 0; }
+}
+.card-head .link { white-space: nowrap; }
+.card-head h2 { min-width: 0; }
+.lists-head { margin-top: var(--s4); }
+/* secondary lists with nothing in them: a quiet one-liner, not a hero empty state */
+.compact .empty { padding: var(--s4) var(--s3); gap: 4px; }
+.compact .empty .ico { width: 44px; height: 44px; margin-bottom: 0; }
+.compact .empty .ico .i { width: 1.4rem; height: 1.4rem; }
+.compact .empty h3 { font-size: 1rem; }
+/* filters: two per row on phones, the first one (item) full width */
+.filters.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.filters.grid2 > .field:first-child { grid-column: 1 / -1; }
+@media (min-width: 768px) { .filters.grid2 { display: flex; } }
+.pick-note { display: flex; gap: 6px; align-items: flex-start; flex: 1 1 100%; color: var(--ink-2); }
+.pick-note .i { flex: none; margin-top: 2px; color: var(--info); }
+.tap-hint { display: none; margin: 0; }
+@media (max-width: 767.98px) { .tap-hint { display: block; } }
+.filter-box { margin-bottom: var(--s2); }
+.filter-box .filters { margin-bottom: 0; }

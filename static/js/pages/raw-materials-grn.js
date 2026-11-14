@@ -66,7 +66,7 @@ function mountReceive(panel, ctx) {
       return el('div.stack.tight', {},
         ui.cardsTable({
           columns: [
-            { label: 'GRN', cls: 'k', render: (g) => [el('b', { text: g.grn_no }), el('small', { text: g.supplier_name })] },
+            { label: 'GRN', cls: 'k', render: (g) => [el('b.nowrap', { text: g.grn_no }), el('small', { text: g.supplier_name })] },
             { label: 'Status', cls: 's', render: (g) => ui.badge(g.status === 'ACTIVE' ? 'RECEIVED' : 'VOID', g.status === 'ACTIVE' ? 'Received' : 'Voided') },
             { label: 'Date', render: (g) => ui.fmtDate(g.received_on) }, { label: 'Challan', render: (g) => g.challan_no || '-' },
             { label: 'Order', hideMobile: true, render: (g) => g.po_no || '-' }, { label: 'Godown', hideMobile: !ERP.godown.multiple, render: (g) => g.location_name },
@@ -257,7 +257,7 @@ function mountReturns(panel, ctx) {
       const d = await api.get('/api/raw-materials/supplier-returns', { limit: 15, offset });
       return el('div.stack.tight', {}, ui.cardsTable({
         columns: [
-          { label: 'Return', cls: 'k', render: (r) => [el('b', { text: r.rtv_no }), el('small', { text: r.supplier_name })] },
+          { label: 'Return', cls: 'k', render: (r) => [el('b.nowrap', { text: r.rtv_no }), el('small', { text: r.supplier_name })] },
           { label: 'Date', render: (r) => ui.fmtDate(r.created_at) }, { label: 'Items', cls: 'num', render: (r) => `${r.lines_count}` },
           { label: '', cls: 'a', render: (r) => L.btn('Open / print', 'print', { kind: 'secondary', sm: true, onClick: () => openRtv(r.id) }) },
         ], rows: d.items, onRow: (r) => openRtv(r.id),

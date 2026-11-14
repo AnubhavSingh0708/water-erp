@@ -48,7 +48,7 @@ export function mountBatches(panel, ctx) {
       const d = await api.get('/api/production/batches', { limit: 15, offset: st.offset, qc_status: st.qc, q: st.q, ...L.readParam() });
       return el('div.stack.tight', {}, ui.cardsTable({
         columns: [
-          { label: 'Batch', cls: 'k', render: (b) => [el('b', { text: b.batch_no }), el('small', { text: b.product_name })] },
+          { label: 'Batch', cls: 'k', render: (b) => [el('b.nowrap', { text: b.batch_no }), el('small', { text: b.product_name })] },
           { label: 'QC', cls: 's', render: (b) => ui.badge(b.qc_status, b.qc_status === 'QUARANTINE' ? 'Waiting for QC' : undefined) },
           { label: 'Made', cls: 'num', render: (b) => L.cratesCell(b.crates, b.crates_per_pallet, b.kind === 'RETURNABLE' ? 'jars' : 'crates') },
           { label: 'Date', render: (b) => `${ui.fmtDate(b.produced_on)} - ${b.shift.toLowerCase()}` }, { label: 'Expiry', hideMobile: true, render: (b) => ui.fmtDate(b.expiry_date) },
@@ -106,10 +106,10 @@ export function mountBatches(panel, ctx) {
           ui.cardsTable({ columns: [{ label: 'Material', cls: 'k', render: (m) => [el('b', { text: m.name }), el('small', { text: m.kind === 'WASTE' ? 'waste' : 'consumed' })] }, { label: 'Qty', cls: 'num', render: (m) => ui.fmtNum(m.qty, 4) },
             { label: 'GRN', render: (m) => m.grn_no || '-' }, { label: 'Supplier', render: (m) => m.supplier_name || '-' }, { label: 'Supplier lot', hideMobile: true, render: (m) => m.lot_no || '-' }], rows: t.materials || [], emptyState: { icon: 'box', title: 'No lot information' } }),
           el('h3', { text: 'Trips and sales' }),
-          ui.cardsTable({ columns: [{ label: 'Trip', cls: 'k', render: (x) => [el('b', { text: x.trip_no }), el('small', { text: `${x.vehicle_reg || ''} ${x.route_name || ''}` })] }, { label: 'Status', cls: 's', render: (x) => ui.badge(x.status) },
+          ui.cardsTable({ columns: [{ label: 'Trip', cls: 'k', render: (x) => [el('b.nowrap', { text: x.trip_no }), el('small', { text: `${x.vehicle_reg || ''} ${x.route_name || ''}` })] }, { label: 'Status', cls: 's', render: (x) => ui.badge(x.status) },
             { label: 'Crates', cls: 'num', render: (x) => ui.fmtNum(x.crates, 0) }, { label: 'Delivered', cls: 'num', render: (x) => ui.fmtNum(x.delivered, 0) }, { label: 'Gate pass', hideMobile: true, render: (x) => x.gate_pass_no || '-' }],
           rows: t.trips || [], emptyState: { icon: 'truck', title: 'Not loaded on any trip yet' } }),
-          (t.dispatches || []).length ? ui.cardsTable({ columns: [{ label: 'Dispatch note', cls: 'k', render: (x) => [el('b', { text: x.dn_no }), el('small', { text: x.party })] }, { label: 'Crates', cls: 'num', render: (x) => ui.fmtNum(x.crates, 0) }, { label: 'Status', cls: 's', render: (x) => ui.badge(x.status) }], rows: t.dispatches }) : null));
+          (t.dispatches || []).length ? ui.cardsTable({ columns: [{ label: 'Dispatch note', cls: 'k', render: (x) => [el('b.nowrap', { text: x.dn_no }), el('small', { text: x.party })] }, { label: 'Crates', cls: 'num', render: (x) => ui.fmtNum(x.crates, 0) }, { label: 'Status', cls: 's', render: (x) => ui.badge(x.status) }], rows: t.dispatches }) : null));
         slot.scrollIntoView({ behavior: 'smooth', block: 'start' });
       } catch (e) { ui.mount(slot, ui.errorState(e, showTrace)); }
     }

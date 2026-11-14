@@ -11,7 +11,7 @@ const view = el('div'); ui.mount(main, view);
 const PAGE = 'godowns';
 let mode = 'list'; let openId = null; let detailRefresh = null;
 const refreshers = {};
-const gName = (id, fallback = 'Godown') => (ERP.godown.list.find((g) => g.id === id) || {}).name || fallback;
+const gName = (id, fallback = 'Godown') => L.anyGodownName(id, fallback);
 const mine = (id) => ERP.godown.list.some((g) => g.id === id);
 const ZONES = ['RM_STORE', 'BLOW_FLOOR', 'FG_READY', 'JAR_EMPTY', 'JAR_CLEAN'];
 
@@ -34,7 +34,7 @@ function mountTransfers(panel, status) {
       return el('div.stack.tight', {}, d.items.some((t) => t.overdue) ? L.banner('err', 'alert', el('b', { text: 'Some transfers have been on the road for more than 48 hours. ' }), 'Call the driver or the receiving godown.') : null,
         ui.cardsTable({
           columns: [
-            { label: 'Transfer', cls: 'k', render: (t) => [el('b', { text: t.tf_no }), el('small', { text: `${t.from_name} to ${t.to_name}` })] },
+            { label: 'Transfer', cls: 'k', render: (t) => [el('b.nowrap', { text: t.tf_no }), el('small', { text: `${t.from_name} to ${t.to_name}` })] },
             { label: 'Status', cls: 's', render: (t) => [ui.badge(t.status), t.overdue ? el('div', { style: { marginTop: '4px', textAlign: 'right' } }, ui.badge('OVERDUE', 'Over 48 h')) : null] },
             { label: 'Sent', render: (t) => [ui.fmtDate(t.created_at), el('small.block.muted', { text: ui.fmtRelative(t.created_at) })] }, { label: 'Items', cls: 'num', render: (t) => `${t.lines_count} ${Number(t.lines_count) === 1 ? 'line' : 'lines'}` },
             { label: 'Vehicle', hideMobile: true, render: (t) => t.vehicle_no || '-' }, { label: 'Received', hideMobile: true, render: (t) => (t.received_at ? ui.fmtDateTime(t.received_at) : '-') },
@@ -146,7 +146,8 @@ function receiveView(t) {
 async function newTransfer() {
   mode = 'create'; L.toTop(); ui.mount(view, ui.skeletonCards(2));
   let vehicles = []; try { vehicles = await L.refVehicles(); } catch { /* optional */ }
-  const gl = ERP.godown.list;
+  const dests = await L.loadAllLocations();                       // every active godown: where goods may be SENT
+  const gl = ERP.godown.list;                                     // godowns this user may send FROM
   const from = ui.field({ label: 'Send from', name: 'from_location_id', type: 'select', required: true, options: gl.map((g) => ({ value: g.id, label: g.name })), value: (ERP.godown.current() && ERP.godown.current() !== 'all') ? ERP.godown.current() : (gl[0] || {}).id });
   const to = ui.field({ label: 'Send to', name: 'to_location_id', type: 'select', required: true, options: [] });
   const veh = ui.field({ label: 'Vehicle', name: 'vehicle_id', type: 'select', optional: true, options: [{ value: '', label: 'Not listed / none' }, ...vehicles.map((v) => ({ value: v.id, label: v.reg_no }))] });
@@ -154,9 +155,9 @@ async function newTransfer() {
   const driver = ui.field({ label: 'Driver', name: 'driver_name', type: 'text', optional: true, maxlength: 80 });
   const note = ui.field({ label: 'Note', name: 'note', type: 'textarea', optional: true, rows: 2, maxlength: 500 });
   const lines = []; const linesHost = el('div.lines'); const emptyLines = el('p.muted', { text: 'No goods added yet.' });
-  const fill = () => { const cur = from.get(); ui.clear(to.input); const opts = gl.filter((g) => g.id !== cur); to.input.append(...(opts.length ? [el('option', { value: '', text: 'Choose destination...' }), ...opts.map((g) => el('option', { value: g.id, text: g.name }))] : [el('option', { value: '', text: 'No other godown available to you' })])); if (opts.length === 1) to.input.value = opts[0].id; };
+  const fill = () => { const cur = from.get(); ui.clear(to.input); const opts = dests.filter((g) => g.id !== cur); to.input.append(...(opts.length ? [el('option', { value: '', text: 'Choose destination...' }), ...opts.map((g) => el('option', { value: g.id, text: g.name }))] : [el('option', { value: '', text: 'No other godown exists' })])); if (opts.length === 1) to.input.value = opts[0].id; };
   fill();
-  const noDest = gl.length < 2 ? L.banner('warn', 'info', el('b', { text: 'Your account can use only one godown. ' }), 'The destination list shows only the godowns you may use. Ask an administrator to extend your access to send goods elsewhere.') : null;
+  const noDest = dests.length < 2 ? L.banner('warn', 'info', el('b', { text: 'There is no other godown to send goods to. ' }), 'An administrator can add a godown under Administration > Master data.') : null;
   const form = el('form.stack', { id: 'tf-form', novalidate: true, autocomplete: 'off' }, el('div.form-error', { role: 'alert' }), noDest,
     el('div.card.stack', {}, el('div.form-grid', {}, from.el, to.el)),
     el('div.card.stack', {}, el('div.card-head', {}, el('h2', {}, icon('box'), 'Goods to send')), linesHost, emptyLines, L.btn('Add goods', 'plus', { kind: 'secondary', onClick: () => addDialog() })),

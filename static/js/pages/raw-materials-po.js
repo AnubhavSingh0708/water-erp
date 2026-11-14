@@ -28,7 +28,7 @@ export function mountPo(panel, ctx) {
       const shown = status === 'ACTIVE' ? rows.filter((r) => r.status === 'OPEN' || r.status === 'PARTIAL') : rows;
       return ui.cardsTable({
         columns: [
-          { label: 'Order', cls: 'k', render: (p) => [el('b', { text: p.po_no }), el('small', { text: p.supplier_name })] },
+          { label: 'Order', cls: 'k', render: (p) => [el('b.nowrap', { text: p.po_no }), el('small', { text: p.supplier_name })] },
           { label: 'Status', cls: 's', render: (p) => ui.badge(p.status) },
           { label: 'Ordered', render: (p) => ui.fmtDate(p.ordered_on) },
           { label: 'Expected', render: (p) => (p.expected_on ? ui.fmtDate(p.expected_on) : '-') },
