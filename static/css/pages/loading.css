@@ -102,7 +102,12 @@
   .gp-doc.print-thermal { width: 74mm; font-size: 9pt; }
   .gp-doc.print-thermal .gp-totals { grid-template-columns: 1fr 1fr 1fr; gap: 2px; padding: 4px; }
   .gp-doc.print-thermal .gp-title h2 { font-size: 12pt; }
-  .gp-doc.print-thermal .sign-row { gap: 10px; margin-top: 12px; }
+  .gp-doc.print-thermal .sign-row { grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+  .gp-doc.print-thermal .kv { grid-template-columns: 4.2rem 1fr; gap: 3px 6px; font-size: 8.5pt; }
+  .gp-doc.print-thermal .tbl { table-layout: fixed; width: 100%; }
+  .gp-doc.print-thermal .tbl th:nth-child(3), .gp-doc.print-thermal .tbl td:nth-child(3), .gp-doc.print-thermal .tbl th:nth-child(5), .gp-doc.print-thermal .tbl td:nth-child(5) { display: none !important; }
+  .gp-doc.print-thermal .tbl th:nth-child(1) { width: 38%; } .gp-doc.print-thermal .tbl th:nth-child(4) { width: 24%; }
+  .gp-doc.print-thermal .tbl td { overflow-wrap: anywhere; }
   .gp-doc.print-thermal .tbl th, .gp-doc.print-thermal .tbl td { padding: 2px 3px; font-size: 8.5pt; }
   .gp-doc .tbl td.num, .gp-doc .tbl th.num { text-align: right; }
   body.print-thermal-mode .print-header { flex-direction: column; gap: 4px; }
