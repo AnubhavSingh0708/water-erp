@@ -42,7 +42,7 @@ function render() {
   if (!state.online) { text = 'You are offline'; sub = 'Nothing is lost - your entries are kept on this phone and can be sent when you are back online.'; }
   else if (state.server === 'restarting') { text = 'Server restarting...'; sub = 'This takes a few seconds. Your entries are kept; the page reconnects by itself.'; tone = 'warn'; ic = 'refresh'; }
   else if (state.server === 'degraded') { text = 'Database temporarily unavailable'; sub = 'Nothing was saved from the last attempt. Your entries are kept - try again in a moment.'; tone = 'warn'; ic = 'alert'; }
-  else { text = 'Server unreachable - nothing is lost, your entries are kept'; sub = 'We keep retrying. You can continue typing; press Retry on a form once the banner is gone.'; }
+  else { text = 'Server unreachable - nothing is lost, your entries are kept'; sub = 'Retrying automatically. Keep typing - press Retry on the form when this clears.'; }
   banner = el('div.banner', { class: tone, role: 'status', 'aria-live': 'polite' }, icon(ic, state.server === 'restarting' ? 'spin' : ''),
     el('div.grow', {}, el('b', { text }), el('div', { style: { fontWeight: 500 }, text: sub })),
     el('button.btn.secondary.sm', { type: 'button', on: { click: () => { schedule(0); } } }, 'Check now'));

@@ -49,7 +49,7 @@ export function mountUsers(host) {
       { name: 'full_name', label: 'Full name', type: 'text', required: true, maxlength: 120 },
       { name: 'password', label: 'Initial password', type: 'password', createOnly: true, required: true, maxlength: 200, help: 'At least 10 characters. Share it privately; the user can change it in their profile.', full: true },
       { name: 'is_admin', label: 'Administrator (all pages and the admin console)', type: 'bool', full: true },
-      { name: 'allowed_pages', label: 'Pages this user may open', type: 'checks', optionsFrom: { url: `${A}/pages`, value: 'key', label: 'label', filter: (p) => p.key !== 'admin' }, showWhen: (v) => !v.is_admin, help: 'The dashboard is included automatically for most roles - tick what is needed.' },
+      { name: 'allowed_pages', label: 'Pages this user may open', type: 'checks', optionsFrom: { url: `${A}/pages`, value: 'key', label: 'label', filter: (p) => p.key !== 'admin' }, showWhen: (v) => !v.is_admin, help: 'Tick every page this person needs.' },
       { name: 'allowed_location_ids', label: 'Godown restriction', type: 'checks', optionsFrom: { url: `${A}/locations?active=true`, value: 'id', label: (r) => r.name, sub: (r) => r.code }, help: 'Leave all unticked to allow every godown. Tick some to limit this user to them.', emptyText: 'No godowns defined yet.' },
       { name: 'subscribed_notifications', label: 'Notifications they receive by default', type: 'checks', optionsFrom: { url: `${A}/notification-types`, value: 'code', label: 'label' } },
     ],

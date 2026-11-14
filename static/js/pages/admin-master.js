@@ -67,8 +67,8 @@ export const SCHEMAS = {
     ],
     fields: [
       { name: 'code', label: 'Code', type: 'text', required: true, upper: true, maxlength: 40 }, { name: 'name', label: 'Name', type: 'text', required: true, maxlength: 120 },
-      { name: 'kind', label: 'Kind', type: 'select', required: true, default: 'BOTTLED', options: [{ value: 'BOTTLED', label: 'Bottled (single-use PET, blown from a preform)' }, { value: 'RETURNABLE', label: 'Returnable container / jar (reusable)' }], full: true },
-      { name: 'size_ml', label: 'Size', type: 'int', unit: 'ml', min: 1, nullable: true, help: '500, 1000 ... 20000 for a 20 L jar.', showWhen: () => true },
+      { name: 'kind', label: 'Kind', type: 'select', required: true, default: 'BOTTLED', options: [{ value: 'BOTTLED', label: 'Bottled (PET from preform)' }, { value: 'RETURNABLE', label: 'Returnable jar / container' }], full: true },
+      { name: 'size_ml', label: 'Size', type: 'int', unit: 'ml', min: 1, nullable: true, help: 'Required for bottled products. 500, 1000 ... 20000 for a 20 L jar.' },
       { name: 'units_per_crate', label: 'Bottles per crate', type: 'int', min: 1, max: 10000, default: 12, required: true, showWhen: (v) => v.kind === 'BOTTLED' },
       { name: 'crates_per_pallet', label: 'Crates per pallet', type: 'int', min: 1, nullable: true, help: 'Standard pallet pattern. Shows "pallets + loose crates" everywhere.' },
       { name: 'shelf_life_days', label: 'Shelf life', type: 'int', unit: 'days', min: 1, max: 3650, default: 180, required: true },
@@ -211,7 +211,7 @@ async function openBom(product) {
         el('div.field', { dataset: { name: `lines[${i}].raw_material_id` } }, sel, el('p.error')),
         el('div.grid.cols-2', {},
           el('div.field', { dataset: { name: `lines[${i}].qty_per_crate` } }, qty, el('p.help', { text: unit || 'Quantity' }), el('p.error')),
-          el('div.field', { dataset: { name: `lines[${i}].basis` } }, basis, mat ? el('p.help', { text: `Taken from ${ZONE_FOR(mat.category).replace(/_/g, ' ').toLowerCase()}` }) : null, el('p.error'))),
+          el('div.field', { dataset: { name: `lines[${i}].basis` } }, basis, mat ? el('p.help', { text: `Taken from the ${ZONE_FOR(mat.category) === 'BLOW_FLOOR' ? 'blow floor' : 'raw-material store'}` }) : null, el('p.error'))),
         el('div.row.end', {}, el('button.btn.danger.outline.sm', { type: 'button', on: { click: () => { lines.splice(i, 1); render(); } } }, icon('trash', 'sm'), 'Remove')))));
     });
   };
