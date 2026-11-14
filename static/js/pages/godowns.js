@@ -208,7 +208,7 @@ async function newTransfer() {
     let bad = false;
     if (!from.get()) { from.setError('Choose the sending godown'); bad = true; } else from.setError('');
     if (!to.get()) { to.setError('Choose where the goods are going'); bad = true; } else to.setError('');
-    if (!lines.length) { ui.formError(form, { status: 422, message: 'Add at least one item to send.', fields: {} }); return; }
+    if (!lines.length) { ui.formError(form, { status: 422, message: 'Add at least one item to send.', fields: {} }); bad = true; }
     lines.forEach((l) => { l.chk && l.chk(); if (L.qtyProblem(l.qty, { whole: l.g.whole, max: ui.toNum(l.g.free) })) bad = true; });
     if (bad) { form.querySelector('.has-error select, .line-card .echo.bad')?.scrollIntoView({ block: 'center', behavior: 'smooth' }); return; }
     const sel = vehicles.find((v) => v.id === veh.get());

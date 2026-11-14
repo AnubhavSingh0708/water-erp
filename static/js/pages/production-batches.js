@@ -143,7 +143,7 @@ export function mountBatches(panel, ctx) {
 
     function paintGate(s) {
       ui.clear(gateHost); if (!s) return;
-      if (s.overdue || !s.last_logged_at) gateHost.append(L.banner('warn', 'clock', el('b', { text: 'No water reading in the last hour. ' }), 'You can continue, but log a reading first if you can. ', el('button.btn.ghost.sm', { type: 'button', on: { click: () => ctx.goto('water') } }, 'Log water reading')));
+      if (s.overdue || !s.last_logged_at) gateHost.append(L.banner('warn', 'clock', el('b', { text: 'No water reading in the last hour. ' }), 'You can continue, but log a reading first if you can.', el('div.banner-act', {}, el('button.btn.secondary.sm', { type: 'button', on: { click: () => ctx.goto('water') } }, icon('droplet', 'sm'), 'Log water reading'))));
       if (s.last_out_of_range) gateHost.append(L.banner('err', 'alert', el('b', { text: 'The latest water reading was out of range. ' }), 'You will have to confirm before this batch is created. Re-test the water first.'));
     }
     paintGate(wstat);
