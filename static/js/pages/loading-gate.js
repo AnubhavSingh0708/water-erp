@@ -8,7 +8,7 @@ export function printDoc(docEl, { thermal = false, title } = {}) {
   document.body.classList.remove('printing-label'); document.querySelectorAll('.label-print-root').forEach((n) => n.remove());
   const oldTitle = document.title;
   document.querySelectorAll('style.print-page').forEach((n) => n.remove());
-  const pageStyle = thermal ? Object.assign(document.createElement('style'), { className: 'print-page', textContent: '@page { size: 80mm auto; margin: 3mm; }' }) : null;
+  const pageStyle = thermal ? Object.assign(document.createElement('style'), { className: 'print-page', textContent: '@page { size: 80mm 297mm; margin: 3mm; }' }) : null;
   if (pageStyle) document.head.append(pageStyle);
   docEl.classList.toggle('print-thermal', thermal);
   document.body.classList.toggle('print-thermal-mode', thermal);
