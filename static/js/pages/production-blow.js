@@ -102,7 +102,7 @@ export function mountBlow(panel, ctx) {
     const draft = L.stateDraft({ page: 'production', id: 'blow', form, get: getState, set: setState });
     draft.restore(); calc(); checkStock();
 
-    form.addEventListener('submit', async (ev) => {
+    form.addEventListener('submit', L.once(async (ev) => {
       ev.preventDefault(); ui.clearFormError(form);
       let bad = false;
       if (!prod.get()) { prod.setError('Choose the product'); bad = true; } else prod.setError('');
@@ -126,7 +126,7 @@ export function mountBlow(panel, ctx) {
       const r = await L.submitDocument({ flow, form, button: submit, path: '/api/production/blow-runs', body, title: 'Review blow molding run', confirmText: 'Save run', sendConfirm: false,
         summary: 'Preforms leave the raw store, good bottles go to the blow floor and scrap is booked to the scrap yard.' });
       if (r) { draft.clear(); ui.toast.ok(`Saved ${r.run_no}`); (r.warnings || []).forEach((w) => ui.toast.warn(w)); setState({}); loadHist(); checkStock({ force: true }); ctx.refreshers.batches && ctx.refreshers.batches(); }
-    });
+    }));
     const csv = L.btn('CSV', 'download', { kind: 'secondary', sm: true, onClick: () => L.guarded(csv, () => api.download('/api/production/blow-runs', { query: { format: 'csv', ...L.readParam() } })) });
     ui.mount(holder, form, L.actionBar(submit), el('div.row.between', {}, el('h2', { text: 'Recent runs' }), csv), histHost);
     loadHist();

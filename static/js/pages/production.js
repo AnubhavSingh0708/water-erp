@@ -74,7 +74,7 @@ function mountWater(panel) {
     const n = Number(t); if (n < lo || n > hi) return `${label} must be between ${lo} and ${hi}`;
     return '';
   };
-  form.addEventListener('submit', async (ev) => {
+  form.addEventListener('submit', L.once(async (ev) => {
     ev.preventDefault(); ui.clearFormError(form);
     const e1 = problem(tds.get(), 'TDS', 0, 10000), e2 = problem(ph.get(), 'pH', 0, 14), e3 = problem(oz.get(), 'Ozone', 0, 100, true);
     tds.setError(e1); ph.setError(e2); oz.setError(e3);
@@ -99,7 +99,7 @@ function mountWater(panel) {
       draft.clear(); ui.toast.ok('Water reading saved'); (r.warnings || []).forEach((w) => ui.toast.warn(w));
       setState({}); loadStatus(); loadHist();
     }
-  });
+  }));
 
   async function loadStatus() {
     try { const s = await api.get('/api/production/water-logs/status'); ui.mount(statusHost, waterStatusBanner(s)); } catch (e) { if (!e.redirecting) ui.mount(statusHost, L.banner('warn', 'wifi-off', 'Cannot read the water test status right now.')); }

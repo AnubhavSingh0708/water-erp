@@ -229,7 +229,15 @@ export function makeFlow() { return { act: api.action(), retrySig: null }; }
  * (user went back / error shown in the form). A network failure after the review leaves "Not sent - Retry" and the next
  * press skips straight to the resend with the SAME key (the server replays the first success instead of duplicating).
  */
-export async function submitDocument({ flow, form, button, path, body, title, confirmText, danger = false, summary, dry = true, sendConfirm = true, onStale, onError, units, method = 'post', decorate }) {
+export async function submitDocument(opts) {
+  const { flow } = opts;
+  if (flow.inFlight) return null;                 // a second tap while the first is still being reviewed / sent does nothing
+  flow.inFlight = true;
+  try { return await submitDocumentNow(opts); } finally { flow.inFlight = false; }
+}
+/** Wrap an async handler so a second call while the first is still running is ignored (double tap). */
+export function once(fn) { let busy = false; return async (...a) => { if (busy) { if (a[0] && a[0].preventDefault) a[0].preventDefault(); return undefined; } busy = true; try { return await fn(...a); } finally { busy = false; } }; }
+async function submitDocumentNow({ flow, form, button, path, body, title, confirmText, danger = false, summary, dry = true, sendConfirm = true, onStale, onError, units, method = 'post', decorate }) {
   ui.clearFormError(form);
   if (button) resetBtnLabel(button);
   const sig = JSON.stringify([path, body]);

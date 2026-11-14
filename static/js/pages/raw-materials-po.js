@@ -133,7 +133,7 @@ export function mountPo(panel, ctx) {
     } else draft.restore();
 
     function leave() { inForm = false; showList(); }
-    form.addEventListener('submit', async (ev) => {
+    form.addEventListener('submit', L.once(async (ev) => {
       ev.preventDefault(); ui.clearFormError(form);
       let bad = false; const lines = [];
       if (!supF.get()) { supF.setError('Choose the supplier'); bad = true; }
@@ -152,7 +152,7 @@ export function mountPo(panel, ctx) {
       const body = { supplier_id: supF.get(), lines, ...(expF.get() ? { expected_on: expF.get() } : {}), ...(notesF.get().trim() ? { notes: notesF.get().trim() } : {}) };
       const po = await L.submitPlain({ flow, form, button: submit, path: '/api/raw-materials/purchase-orders', body });
       if (po) { draft.clear(); ui.toast.ok(`Created ${po.po_no}`); leave(); openPo(po.id); }
-    });
+    }));
     const flow = L.makeFlow();
     ui.mount(host, L.backBar('Purchase orders', () => leave()), el('h2', { text: 'New purchase order' }), form, bar);
     bar.prepend(cancel);

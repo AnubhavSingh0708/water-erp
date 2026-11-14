@@ -129,7 +129,7 @@ function receiveView(t) {
   draft.restore(); summary();
   const submit = L.btn('Review and receive', 'check', { kind: 'primary', cls: 'xl', type: 'submit', form: 'recv-form' });
   const flow = L.makeFlow();
-  form.addEventListener('submit', async (ev) => {
+  form.addEventListener('submit', L.once(async (ev) => {
     ev.preventDefault(); ui.clearFormError(form);
     let bad = false;
     rows.forEach((r) => { r.calc(); r.note.setError(''); if (r.problem) { bad = true; } else if (r.short > 0 && r.note.get().trim() === '') { r.note.setError('Say what is missing (for example "2 crates not on the truck")'); bad = true; } });
@@ -138,7 +138,7 @@ function receiveView(t) {
     const r = await L.submitDocument({ flow, form, button: submit, path: `/api/godowns/transfers/${t.id}/receive`, body, title: `Receive ${t.tf_no}`, confirmText: rows.some((x) => x.short > 0) ? 'Confirm the shortage and receive' : 'Receive into stock', danger: rows.some((x) => x.short > 0),
       summary: `Goods arrive in ${t.to_name}. Damaged goods go to the scrap yard; anything missing is written off.`, onStale: () => openTransfer(t.id) });
     if (r) { draft.clear(); ui.toast.ok(`${t.tf_no} received`); (r.warnings || []).forEach((w) => ui.toast.warn(w)); openTransfer(t.id, r); }
-  });
+  }));
   ui.mount(view, el('div.stack', {}, L.backBar(t.tf_no, () => openTransfer(t.id, t)), el('h2', { text: `Receive ${t.tf_no}` }), el('p.section-sub', { text: `From ${t.from_name}. Count what actually came off the truck and type it for each line.` }), sumBox, form), L.actionBar(submit));
 }
 
@@ -203,7 +203,7 @@ async function newTransfer() {
   const draft = L.stateDraft({ page: PAGE, id: 'new', form, get: getState, set: setState });
   renderLines(); draft.restore();
 
-  form.addEventListener('submit', async (ev) => {
+  form.addEventListener('submit', L.once(async (ev) => {
     ev.preventDefault(); ui.clearFormError(form);
     let bad = false;
     if (!from.get()) { from.setError('Choose the sending godown'); bad = true; } else from.setError('');
@@ -216,7 +216,7 @@ async function newTransfer() {
       ...(veh.get() ? { vehicle_id: veh.get(), vehicle_no: sel ? sel.reg_no : undefined } : (vno.get().trim() ? { vehicle_no: vno.get().trim() } : {})), ...(driver.get().trim() ? { driver_name: driver.get().trim() } : {}), ...(note.get().trim() ? { note: note.get().trim() } : {}) };
     const t = await L.submitDocument({ flow, form, button: submit, path: '/api/godowns/transfers', body, title: 'Review transfer', confirmText: 'Send goods', summary: `Goods leave ${gName(from.get())} now and stay "in transit" until ${gName(to.get())} confirms.` });
     if (t) { draft.clear(); ui.toast.ok(`Created ${t.tf_no}`); (t.warnings || []).forEach((w) => ui.toast.warn(w)); showList('IN_TRANSIT'); showNote(t); }
-  });
+  }));
   ui.mount(view, el('div.stack', {}, L.backBar('Transfers', () => showList()), el('h2', { text: 'New godown transfer' }), form), L.actionBar(submit));
 }
 

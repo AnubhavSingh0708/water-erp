@@ -146,12 +146,12 @@ function mountReorder(panel) {
     const cancel = L.btn('Cancel', null, { kind: 'secondary', onClick: () => dlg.close() });
     const dlg = ui.openDialog({ title: 'New purchase order', body: form, actions: [cancel, ok] });
     const flow = L.makeFlow();
-    form.addEventListener('submit', async (ev) => {
+    form.addEventListener('submit', L.once(async (ev) => {
       ev.preventDefault();
       if (!f.get()) { f.setError('Choose a supplier'); return; }
       const po = await L.submitPlain({ flow, form, button: ok, path: `/api/raw-materials/reorder-recommendations/${r.id}/create-po`, body: { supplier_id: f.get() } });
       if (po) { dlg.close(); ui.toast.ok(`Created ${po.po_no}`, { action: { label: 'Open', onClick: () => ctx.goto('po', { open: po.id }) } }); load(); refreshers.po && refreshers.po(); }
-    });
+    }));
   }
   async function dismissRec(r, button) {
     if (!(await ui.confirmDialog({ title: 'Dismiss this suggestion?', message: `${r.material_name} will not be suggested again for 24 hours unless stock drops further.`, confirmText: 'Dismiss' }))) return;

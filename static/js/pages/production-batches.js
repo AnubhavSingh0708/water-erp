@@ -218,7 +218,7 @@ export function mountBatches(panel, ctx) {
     const draft = L.stateDraft({ page: 'production', id: 'batch', form, get: getState, set: setState });
     productChanged(); draft.restore();
 
-    form.addEventListener('submit', async (ev) => {
+    form.addEventListener('submit', L.once(async (ev) => {
       ev.preventDefault(); ui.clearFormError(form);
       let bad = false;
       if (!cur) { prod.setError('Choose the product'); bad = true; } else prod.setError('');
@@ -246,7 +246,7 @@ export function mountBatches(panel, ctx) {
         draft.clear(); ui.toast.ok(`Created ${b.batch_no} - waiting for QC`); (b.warnings || []).forEach((w) => ui.toast.warn(w));
         showList(); openBatch(b);
       }
-    });
+    }));
     ui.mount(host, L.backBar('Batches', () => showList()), el('h2', { text: 'New batch' }), form, L.actionBar(submit));
   }
 
