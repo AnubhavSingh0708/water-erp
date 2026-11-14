@@ -198,7 +198,7 @@ function mountReceive(panel, ctx) {
     if (prefill.poId) { supF.set(prefill.supplierId || ''); await loadPos(prefill.poId); poF.input.value = prefill.poId; await applyPo(prefill.poId); }
     else draft.restore();
 
-    form.addEventListener('submit', async (ev) => {
+    form.addEventListener('submit', L.once(async (ev) => {
       ev.preventDefault(); ui.clearFormError(form);
       let bad = false; const lines = [];
       if (!supF.get()) { supF.setError('Choose the supplier this delivery came from'); bad = true; }
@@ -225,7 +225,7 @@ function mountReceive(panel, ctx) {
         draft.clear(); ui.toast.ok(`Received ${g.grn_no}`); (g.warnings || []).forEach((w) => ui.toast.warn(w));
         inForm = false; showList(); showGrn(g, { onVoided: load }); ctx.refreshers.stock && ctx.refreshers.stock();
       }
-    });
+    }));
     ui.mount(host, L.backBar('Receipts', () => { showList(); }), el('h2', { text: 'Receive goods' }), form, L.actionBar(submit));
   }
 
@@ -309,7 +309,7 @@ function mountReturns(panel, ctx) {
     const draft = L.stateDraft({ page: PAGE, id: 'rtv', form, get: getState, set: (s) => { setState(s); } });
     supF.input.addEventListener('change', async () => { await loadGrns(); });
     grnF.input.addEventListener('change', loadGrn);
-    form.addEventListener('submit', async (ev) => {
+    form.addEventListener('submit', L.once(async (ev) => {
       ev.preventDefault(); ui.clearFormError(form);
       let bad = false; const lines = [];
       if (!supF.get()) { supF.setError('Choose the supplier'); bad = true; }
@@ -327,7 +327,7 @@ function mountReturns(panel, ctx) {
       const body = { supplier_id: supF.get(), grn_id: grnF.get(), lines, ...(loc ? { location_id: loc } : {}), ...(noteF.get().trim() ? { note: noteF.get().trim() } : {}) };
       const r = await L.submitDocument({ flow, form, button: submit, path: '/api/raw-materials/supplier-returns', body, title: 'Review this return', confirmText: 'Return to supplier', summary: 'This removes the goods from the raw store.' });
       if (r) { draft.clear(); ui.toast.ok(`Created ${r.rtv_no}`); showList(); showRtv(r); ctx.refreshers.stock && ctx.refreshers.stock(); }
-    });
+    }));
     ui.mount(host, L.backBar('Returns', () => showList()), el('h2', { text: 'Return goods to a supplier' }), form, L.actionBar(submit));
     loadGrns(); draft.restore();
   }

@@ -14,12 +14,12 @@ export function mountActions(panel, ctx) {
   const host = el('div.stack'); panel.append(host);
   let view = 'home'; let listsHost = null;
 
-  const formView = (title, form, submit, sub) => { view = 'form'; L.toTop(); ui.mount(host, L.backBar('Actions', home), el('h2', { text: title }), sub ? el('p.section-sub', { text: sub }) : null, form, L.actionBar(submit)); };
+  const formView = (title, form, submit, sub) => { view = 'form'; L.enterSub(home); L.toTop(); ui.mount(host, L.backBar('Actions', home), el('h2', { text: title }), sub ? el('p.section-sub', { text: sub }) : null, form, L.actionBar(submit)); };
   const godownLine = () => el('div.chip-row', {}, el('span.chip-s.info', {}, icon('pin', 'sm'), `Godown: ${ERP.godown.currentName() || 'default'}`));
 
   /* ------------------------------------------------------------------------------------------ home */
   function home() {
-    view = 'home';
+    view = 'home'; L.clearSub();
     const all = ERP.godown.current() === 'all';
     const tile = (label, sub, ic, fn) => el('button.action-tile', { type: 'button', disabled: all, on: { click: fn } }, el('span.ico', {}, icon(ic)), el('span.t', {}, el('b', { text: label }), el('small', { text: sub })), icon('chevron-right', 'sm'));
     listsHost = el('div.stack');
@@ -82,7 +82,7 @@ export function mountActions(panel, ctx) {
       q.echo(`${ui.fmtNum(g.have, 4)} -> ${ui.fmtNum(after, 4)} ${g.unit}${after < 0 ? ' - not enough stock' : ''}`, after < 0 ? 'bad' : '');
     }
     q.input.addEventListener('input', upd);
-    form.addEventListener('submit', async (ev) => {
+    form.addEventListener('submit', L.once(async (ev) => {
       ev.preventDefault(); ui.clearFormError(form);
       const g = picker.get(); let bad = false;
       if (!g) { picker.flagMissing(); bad = true; }
@@ -96,7 +96,7 @@ export function mountActions(panel, ctx) {
       const body = { ...withLoc(), item_type: g.item_type, item_id: g.item_id, zone: g.zone, ...(g.lot_id ? { lot_id: g.lot_id } : {}), delta: `${dir.value === 'remove' ? '-' : ''}${q.get().trim()}`, reason: reason.get().trim(), reason_code: code.get() };
       const r = await L.submitDocument({ flow, form, button: submit, path: '/api/warehouse/adjustments', body, title: 'Review adjustment', confirmText: 'Save adjustment', decorate: (fx) => adjustEffects(fx, g, zoneName(g)), summary: 'Adjustments are permanent entries in the stock ledger - they are corrected with another entry, never deleted.' });
       if (r) { ui.toast.ok(`${r.item}: balance is now ${ui.fmtNum(r.balance_after, 4)}`); (r.warnings || []).forEach((w) => ui.toast.warn(w)); home(); }
-    });
+    }));
     formView('Adjust stock', form, submit, 'Use this to correct the system after a count or when an entry was wrong. Stock held by QC cannot be adjusted here.');
   }
 
@@ -119,7 +119,7 @@ export function mountActions(panel, ctx) {
       q.echo(n > ui.toNum(g.free) ? `More than the ${ui.fmtNum(g.free, 4)} that can be moved` : `Moving ${ui.fmtNum(n, 4)} of ${ui.fmtNum(g.free, 4)} ${g.unit}`, n > ui.toNum(g.free) ? 'bad' : '');
     }
     q.input.addEventListener('input', upd);
-    form.addEventListener('submit', async (ev) => {
+    form.addEventListener('submit', L.once(async (ev) => {
       ev.preventDefault(); ui.clearFormError(form);
       const g = picker.get(); let bad = false; if (!g) { picker.flagMissing(); bad = true; }
       const p = L.qtyProblem(q.get(), { whole: g ? g.whole : false, max: g ? ui.toNum(g.free) : undefined }); q.setError(p); if (p) bad = true;
@@ -129,7 +129,7 @@ export function mountActions(panel, ctx) {
       const body = { ...withLoc(), item_type: g.item_type, item_id: g.item_id, ...(g.lot_id ? { lot_id: g.lot_id } : {}), from_zone: g.zone, to_zone: to.get(), qty: q.get().trim(), ...(note.get().trim() ? { note: note.get().trim() } : {}) };
       const r = await L.submitDocument({ flow, form, button: submit, path: '/api/warehouse/transfers', body, title: 'Review move', confirmText: 'Move stock', danger: to.get() === 'SCRAP_YARD' });
       if (r) { ui.toast.ok(`Moved ${ui.fmtNum(r.qty, 4)} of ${r.item} to ${L.zoneLabel(r.to_zone)}`); home(); }
-    });
+    }));
     formView('Move between zones', form, submit, 'Raw materials can move between the raw store and the blow floor. Anything can be moved to the scrap yard with a reason.');
   }
 
@@ -161,7 +161,7 @@ export function mountActions(panel, ctx) {
       q.echo(n > ui.toNum(g.free) ? `More than the ${ui.fmtNum(g.free, 4)} that is free` : `Writing off ${ui.fmtNum(n, 4)} of ${ui.fmtNum(g.free, 4)} ${g.unit}`, n > ui.toNum(g.free) ? 'bad' : 'warn');
     }
     q.input.addEventListener('input', upd);
-    form.addEventListener('submit', async (ev) => {
+    form.addEventListener('submit', L.once(async (ev) => {
       ev.preventDefault(); ui.clearFormError(form);
       const g = picker.get(); let bad = false; if (!g) { picker.flagMissing(); bad = true; }
       const p = L.qtyProblem(q.get(), { whole: g ? g.whole : false, max: g ? ui.toNum(g.free) : undefined }); q.setError(p); if (p) bad = true;
@@ -171,7 +171,7 @@ export function mountActions(panel, ctx) {
       const body = { ...withLoc(), item_type: g.item_type, item_id: g.item_id, zone: g.zone, ...(g.lot_id ? { lot_id: g.lot_id } : {}), qty: q.get().trim(), reason_code: code.get(), note: note.get().trim(), ...(disp.checked ? { dispose: true } : {}) };
       const r = await L.submitDocument({ flow, form, button: submit, path: '/api/warehouse/write-offs', body, title: 'Review write-off', confirmText: 'Write off - cannot be undone', danger: true, summary: 'Written-off stock cannot be brought back. Check the item, lot and quantity.' });
       if (r) { ui.toast.ok(`Written off - ${r.wo_no}`); home(); showVoucher(r); }
-    });
+    }));
     formView('Write off / destroy stock', form, submit, 'Use this for broken, expired, contaminated, spilled or lost goods. A voucher is created that you can print.');
   }
 
@@ -182,11 +182,11 @@ export function mountActions(panel, ctx) {
     const form = el('form.stack', { id: 'cnt-new', novalidate: true }, el('div.form-error', { role: 'alert' }), godownLine(), el('div.card.stack', {}, zone.el, note.el));
     const submit = L.btn('Create count sheet', 'check', { kind: 'primary', type: 'submit', form: 'cnt-new' });
     const flow = L.makeFlow();
-    form.addEventListener('submit', async (ev) => {
+    form.addEventListener('submit', L.once(async (ev) => {
       ev.preventDefault(); if (!zone.get()) { zone.setError('Choose the zone'); return; } zone.setError('');
       const r = await L.submitPlain({ flow, form, button: submit, path: '/api/warehouse/counts', body: { ...withLoc(), zone: zone.get(), ...(note.get().trim() ? { note: note.get().trim() } : {}) } });
       if (r) { ui.toast.ok(`Created ${r.cnt_no}`); openCount(r.id, r); }
-    });
+    }));
     formView('New stock count', form, submit);
   }
 
@@ -195,7 +195,7 @@ export function mountActions(panel, ctx) {
     L.signatureBlock(['Counted by', 'Checked by', 'Approved by']));
 
   async function openCount(id, pre) {
-    view = 'count'; L.toTop(); ui.mount(host, ui.skeletonCards(2));
+    view = 'count'; L.enterSub(home); L.toTop(); ui.mount(host, ui.skeletonCards(2));
     let c; try { c = pre || await api.get(`/api/warehouse/counts/${id}`); } catch (e) { ui.mount(host, L.backBar('Actions', home), ui.errorState(e, () => openCount(id))); return; }
     const pct = Number(L.settings().large_adjust_pct ?? 20);
     const printBtn = L.btn('Print sheet', 'print', { kind: 'secondary', sm: true, onClick: () => L.showDocument({ title: 'Stock count sheet', docNo: c.cnt_no, subtitle: `${L.zoneLabel(c.zone)} - ${c.location_name}`, build: () => countDoc(c) }) });
@@ -223,7 +223,7 @@ export function mountActions(panel, ctx) {
           const v = Number(t) - ui.toNum(l.expected_qty);
           if (v === 0) { chipHost.append(el('span.chip-s.ok', {}, icon('check-circle', 'sm'), 'Matches the system')); ntWrap.hidden = nt.value === ''; return; }
           const e = ui.toNum(l.expected_qty); row.large = e <= 0 || Math.abs(v) * 100 > e * pct;
-          chipHost.append(el('span.chip-s', { class: row.large ? 'bad' : 'warn' }, icon('alert', 'sm'), `${v > 0 ? '+' : ''}${ui.fmtNum(v, 4)}${e > 0 ? ` (${ui.fmtNum((v / e) * 100, 1)} %)` : ''}`), row.large ? el('span.small', { text: 'Large difference - re-count, then add a note.' }) : null);
+          chipHost.append(el('span.chip-s', { class: row.large ? 'bad' : 'warn' }, icon('alert', 'sm'), `${v > 0 ? '+' : ''}${ui.fmtNum(v, 4)}${e > 0 ? ` (${ui.fmtNum((v / e) * 100, 1)} %)` : ''}`), ...(row.large ? [el('span.small', { text: 'Large difference - re-count, then add a note.' })] : []));
           ntWrap.hidden = false; ntWrap.querySelector('label').textContent = row.large ? 'Note for the difference (required)' : 'Note for the difference';
         } };
       inp.addEventListener('input', () => { row.calc(); progress(); }); nt.addEventListener('input', () => { ntWrap.classList.remove('has-error'); });

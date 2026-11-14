@@ -129,7 +129,7 @@ button.stat:hover { border-color: var(--brand-300); box-shadow: var(--shadow); }
 /* ---------------------------------------------------------------- polish (W2b) */
 /* tabs: all of them fit on a 360 px phone (icons only from 480 px up) */
 @media (max-width: 479.98px) {
-  .tabbed .tabs [role="tab"] { padding: 0 11px; gap: 4px; font-size: .93rem; }
+  .tabbed .tabs [role="tab"] { padding: 0 11px; gap: 4px; font-size: .93rem; min-width: 48px; justify-content: center; }
   .tabbed .tabs [role="tab"] > .i { display: none; }
 }
 /* cards on phones: key column a little wider than the status chip; identifiers never break at their hyphens */
@@ -180,5 +180,12 @@ details.collapse > summary > .row .i { color: var(--brand-600); }
 .id-head h2 { white-space: nowrap; }
 .banner-act { margin-top: var(--s2); }
 @media (max-width: 767.98px) { .action-bar .btn:only-child { flex: 1 1 auto; } }
-@media (min-width: 768px) { .tab-panel .tbl td:not(.k):not(.w), .inset .tbl td:not(.k):not(.w), .flat .tbl td:not(.k):not(.w) { white-space: nowrap; } }
+@media (min-width: 768px) { .tbl td.w { min-width: 13rem; } }
 @media (min-width: 768px) { .filters.grid2 .field { flex: 1 1 10rem; max-width: 16rem; } }
+/* safety net: an absurdly long identifier is cut with an ellipsis instead of widening the page */
+@media (max-width: 767.98px) { .table-cards td.k > b.nowrap { display: block; overflow: hidden; text-overflow: ellipsis; } }
+.id-head > div { min-width: 0; max-width: 100%; }
+.id-head h2 { overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+/* a field that gets focus (e.g. the first error) must land below the sticky tabs and above the sticky action bar */
+html { scroll-padding-top: calc(var(--appbar-h) + var(--safe-t) + 72px); scroll-padding-bottom: 8.5rem; }
+@media (min-width: 1024px) { html { scroll-padding-top: calc(var(--appbar-h) + var(--safe-t) + 72px); scroll-padding-bottom: 6rem; } }

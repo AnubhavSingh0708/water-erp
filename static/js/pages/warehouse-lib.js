@@ -51,8 +51,14 @@ export function btn(label, ic, { kind = 'primary', type = 'button', onClick, cls
 export function setBtnLabel(b, text) { const s = b.querySelector('.lbl'); if (s) s.textContent = text; }
 export const resetBtnLabel = (b) => setBtnLabel(b, b.dataset.label || '');
 export function actionBar(...kids) { return el('div.action-bar', {}, ...kids); }
+/* ---- sub-views and the phone's Back button: a detail/form view pushes one history entry so Back returns to the list instead of leaving the page */
+let subFn = null; let leaving = 0;
+export function enterSub(fn) { subFn = fn; try { if (!(history.state && history.state.sub)) history.pushState({ sub: 1 }, '', location.href); } catch { /* ignore */ } }
+export function clearSub() { subFn = null; try { if (history.state && history.state.sub) { leaving += 1; history.back(); } } catch { /* ignore */ } }
+export function goBack(fn) { try { if (history.state && history.state.sub) { subFn = fn; history.back(); return; } } catch { /* ignore */ } fn(); }
+window.addEventListener('popstate', () => { if (leaving > 0) { leaving -= 1; return; } const f = subFn; subFn = null; if (f) f(); });
 export function backBar(label, onBack, ...right) {
-  return el('div.row.between.back-bar', {}, el('button.btn.ghost.sm', { type: 'button', on: { click: onBack } }, icon('chevron-left', 'sm'), label), el('div.btn-row', {}, ...right));
+  return el('div.row.between.back-bar', {}, el('button.btn.ghost.sm', { type: 'button', on: { click: () => goBack(onBack) } }, icon('chevron-left', 'sm'), label), el('div.btn-row', {}, ...right));
 }
 export function chip(text, tone = '') { return el('span.chip-s', { class: tone, text }); }
 export const dash = (v) => (v === null || v === undefined || v === '' ? '-' : v);
@@ -223,7 +229,15 @@ export function makeFlow() { return { act: api.action(), retrySig: null }; }
  * (user went back / error shown in the form). A network failure after the review leaves "Not sent - Retry" and the next
  * press skips straight to the resend with the SAME key (the server replays the first success instead of duplicating).
  */
-export async function submitDocument({ flow, form, button, path, body, title, confirmText, danger = false, summary, dry = true, sendConfirm = true, onStale, onError, units, method = 'post', decorate }) {
+export async function submitDocument(opts) {
+  const { flow } = opts;
+  if (flow.inFlight) return null;                 // a second tap while the first is still being reviewed / sent does nothing
+  flow.inFlight = true;
+  try { return await submitDocumentNow(opts); } finally { flow.inFlight = false; }
+}
+/** Wrap an async handler so a second call while the first is still running is ignored (double tap). */
+export function once(fn) { let busy = false; return async (...a) => { if (busy) { if (a[0] && a[0].preventDefault) a[0].preventDefault(); return undefined; } busy = true; try { return await fn(...a); } finally { busy = false; } }; }
+async function submitDocumentNow({ flow, form, button, path, body, title, confirmText, danger = false, summary, dry = true, sendConfirm = true, onStale, onError, units, method = 'post', decorate }) {
   ui.clearFormError(form);
   if (button) resetBtnLabel(button);
   const sig = JSON.stringify([path, body]);
@@ -341,7 +355,7 @@ export function tabbed(host, defs, { initial } = {}) {
     if (!panels[id]) id = defs[0].id;
     active = id; t.select(id);
     defs.forEach((d) => { panels[d.id].hidden = d.id !== id; });
-    try { history.replaceState(null, '', `#${id}`); } catch { /* ignore */ }
+    try { history.replaceState(history.state, '', `#${id}`); } catch { /* ignore */ }
     if (!rendered.has(id)) { rendered.add(id); const d = defs.find((x) => x.id === id); try { const r = d.render(panels[id]); if (r && r.catch) r.catch((e) => ui.mount(panels[id], ui.errorState(e, () => { rendered.delete(id); show(id); }))); } catch (e) { ui.mount(panels[id], ui.errorState(e)); } }
   }
   const api_ = { select: (id) => show(id), current: () => active, panel: (id) => panels[id], tabs: t, rendered: (id) => rendered.has(id), invalidate: (id) => rendered.delete(id) };

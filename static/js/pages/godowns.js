@@ -17,7 +17,7 @@ const ZONES = ['RM_STORE', 'BLOW_FLOOR', 'FG_READY', 'JAR_EMPTY', 'JAR_CLEAN'];
 
 /* ---------------------------------------------------------------------------------------------- list */
 function showList(initial = 'IN_TRANSIT') {
-  mode = 'list'; openId = null; detailRefresh = null; L.toTop();
+  mode = 'list'; openId = null; detailRefresh = null; L.clearSub(); L.toTop();
   ui.clear(view);
   view.append(el('div.page-head', {}, el('div', {}, el('p.sub', { text: 'Move goods between godowns. They stay "in transit" until the other godown confirms what arrived.' })),
     el('div.actions', {}, L.btn('New transfer', 'plus', { onClick: () => newTransfer() }))));
@@ -36,8 +36,8 @@ function mountTransfers(panel, status) {
           columns: [
             { label: 'Transfer', cls: 'k', render: (t) => [el('b.nowrap', { text: t.tf_no }), el('small', { text: `${t.from_name} to ${t.to_name}` })] },
             { label: 'Status', cls: 's', render: (t) => [ui.badge(t.status), t.overdue ? el('div', { style: { marginTop: '4px', textAlign: 'right' } }, ui.badge('OVERDUE', 'Over 48 h')) : null] },
-            { label: 'Sent', render: (t) => [ui.fmtDate(t.created_at), el('small.block.muted', { text: ui.fmtRelative(t.created_at) })] }, { label: 'Items', cls: 'num', render: (t) => `${t.lines_count} ${Number(t.lines_count) === 1 ? 'line' : 'lines'}` },
-            { label: 'Vehicle', hideMobile: true, render: (t) => t.vehicle_no || '-' }, { label: 'Received', hideMobile: true, render: (t) => (t.received_at ? ui.fmtDateTime(t.received_at) : '-') },
+            { label: 'Sent', render: (t) => [el('span.nowrap', { text: ui.fmtDate(t.created_at) }), el('small.block.muted', { text: ui.fmtRelative(t.created_at) })] }, { label: 'Items', cls: 'num', render: (t) => `${t.lines_count} ${Number(t.lines_count) === 1 ? 'line' : 'lines'}` },
+            { label: 'Vehicle', hideMobile: true, render: (t) => el('span.nowrap', { text: t.vehicle_no || '-' }) }, { label: 'Received', hideMobile: true, render: (t) => (t.received_at ? el('span.nowrap', { text: ui.fmtDateTime(t.received_at) }) : '-') },
             { label: '', cls: 'a', render: (t) => el('div.btn-row', {}, L.btn(t.status === 'IN_TRANSIT' && mine(t.to_location_id) ? 'Open and receive' : 'Open', 'list', { kind: t.status === 'IN_TRANSIT' && mine(t.to_location_id) ? 'primary' : 'secondary', sm: true, onClick: () => openTransfer(t.id) })) },
           ], rows: d.items, onRow: (t) => openTransfer(t.id),
           emptyState: { icon: 'transfer', title: status === 'IN_TRANSIT' ? 'Nothing on the road' : 'No transfers here', text: status === 'IN_TRANSIT' ? 'Create a transfer when goods leave for another godown.' : 'Transfers appear here once they are received or cancelled.' },
@@ -62,7 +62,7 @@ const showNote = (t) => L.showDocument({ title: 'Godown transfer note', docNo: t
 
 /* ---------------------------------------------------------------------------------------------- detail */
 async function openTransfer(id, pre) {
-  mode = 'detail'; openId = id; L.toTop(); ui.mount(view, ui.skeletonCards(2));
+  mode = 'detail'; openId = id; L.enterSub(() => showList()); L.toTop(); ui.mount(view, ui.skeletonCards(2));
   let t;
   try { t = pre || await api.get(`/api/godowns/transfers/${id}`); } catch (e) { ui.mount(view, L.backBar('Transfers', () => showList()), ui.errorState(e, () => openTransfer(id))); return; }
   const printBtn = L.btn('Print note', 'print', { kind: 'secondary', sm: true, onClick: () => showNote(t) });
@@ -95,7 +95,7 @@ async function cancelTransfer(t, button) {
 
 /* ---------------------------------------------------------------------------------------------- receive */
 function receiveView(t) {
-  mode = 'receive'; L.toTop();
+  mode = 'receive'; L.enterSub(() => openTransfer(t.id, t)); L.toTop();
   const form = el('form.stack', { id: 'recv-form', novalidate: true, autocomplete: 'off' }, el('div.form-error', { role: 'alert' }));
   const rows = t.lines.map((l) => {
     const whole = l.item_type === 'PRODUCT';
@@ -129,7 +129,7 @@ function receiveView(t) {
   draft.restore(); summary();
   const submit = L.btn('Review and receive', 'check', { kind: 'primary', cls: 'xl', type: 'submit', form: 'recv-form' });
   const flow = L.makeFlow();
-  form.addEventListener('submit', async (ev) => {
+  form.addEventListener('submit', L.once(async (ev) => {
     ev.preventDefault(); ui.clearFormError(form);
     let bad = false;
     rows.forEach((r) => { r.calc(); r.note.setError(''); if (r.problem) { bad = true; } else if (r.short > 0 && r.note.get().trim() === '') { r.note.setError('Say what is missing (for example "2 crates not on the truck")'); bad = true; } });
@@ -138,13 +138,13 @@ function receiveView(t) {
     const r = await L.submitDocument({ flow, form, button: submit, path: `/api/godowns/transfers/${t.id}/receive`, body, title: `Receive ${t.tf_no}`, confirmText: rows.some((x) => x.short > 0) ? 'Confirm the shortage and receive' : 'Receive into stock', danger: rows.some((x) => x.short > 0),
       summary: `Goods arrive in ${t.to_name}. Damaged goods go to the scrap yard; anything missing is written off.`, onStale: () => openTransfer(t.id) });
     if (r) { draft.clear(); ui.toast.ok(`${t.tf_no} received`); (r.warnings || []).forEach((w) => ui.toast.warn(w)); openTransfer(t.id, r); }
-  });
+  }));
   ui.mount(view, el('div.stack', {}, L.backBar(t.tf_no, () => openTransfer(t.id, t)), el('h2', { text: `Receive ${t.tf_no}` }), el('p.section-sub', { text: `From ${t.from_name}. Count what actually came off the truck and type it for each line.` }), sumBox, form), L.actionBar(submit));
 }
 
 /* ---------------------------------------------------------------------------------------------- create */
 async function newTransfer() {
-  mode = 'create'; L.toTop(); ui.mount(view, ui.skeletonCards(2));
+  mode = 'create'; L.enterSub(() => showList()); L.toTop(); ui.mount(view, ui.skeletonCards(2));
   let vehicles = []; try { vehicles = await L.refVehicles(); } catch { /* optional */ }
   const dests = await L.loadAllLocations();                       // every active godown: where goods may be SENT
   const gl = ERP.godown.list;                                     // godowns this user may send FROM
@@ -203,7 +203,7 @@ async function newTransfer() {
   const draft = L.stateDraft({ page: PAGE, id: 'new', form, get: getState, set: setState });
   renderLines(); draft.restore();
 
-  form.addEventListener('submit', async (ev) => {
+  form.addEventListener('submit', L.once(async (ev) => {
     ev.preventDefault(); ui.clearFormError(form);
     let bad = false;
     if (!from.get()) { from.setError('Choose the sending godown'); bad = true; } else from.setError('');
@@ -216,7 +216,7 @@ async function newTransfer() {
       ...(veh.get() ? { vehicle_id: veh.get(), vehicle_no: sel ? sel.reg_no : undefined } : (vno.get().trim() ? { vehicle_no: vno.get().trim() } : {})), ...(driver.get().trim() ? { driver_name: driver.get().trim() } : {}), ...(note.get().trim() ? { note: note.get().trim() } : {}) };
     const t = await L.submitDocument({ flow, form, button: submit, path: '/api/godowns/transfers', body, title: 'Review transfer', confirmText: 'Send goods', summary: `Goods leave ${gName(from.get())} now and stay "in transit" until ${gName(to.get())} confirms.` });
     if (t) { draft.clear(); ui.toast.ok(`Created ${t.tf_no}`); (t.warnings || []).forEach((w) => ui.toast.warn(w)); showList('IN_TRANSIT'); showNote(t); }
-  });
+  }));
   ui.mount(view, el('div.stack', {}, L.backBar('Transfers', () => showList()), el('h2', { text: 'New godown transfer' }), form), L.actionBar(submit));
 }
 
