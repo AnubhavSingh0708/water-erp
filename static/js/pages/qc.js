@@ -24,7 +24,7 @@ function ageBadge(mins) {
 const testBadge = (r) => (r === 'PASS' ? ui.badge('PASS', 'Test passed') : r === 'FAIL' ? ui.badge('FAIL', 'Test failed') : el('span.chip-s', { text: 'No test yet' }));
 
 function showList(initial = 'queue') {
-  mode = 'list'; openId = null; L.toTop();
+  mode = 'list'; openId = null; L.clearSub(); L.toTop();
   try { history.replaceState(null, '', location.pathname); } catch { /* ignore */ }
   ui.clear(view);
   const tabs = L.tabbed(view, [
@@ -52,7 +52,7 @@ function mountQueue(panel) {
             { label: 'Waiting', cls: 's', render: (b) => ageBadge(b.age_minutes) },
             { label: 'Quantity', cls: 'num', render: (b) => L.cratesCell(b.crates, b.crates_per_pallet, b.kind === 'RETURNABLE' ? 'jars' : 'crates') },
             { label: 'Lab test', render: (b) => [testBadge(b.last_test_result), b.tests_count > 1 ? el('small.block.muted', { text: `${b.tests_count} tests` }) : null] },
-            { label: 'Made', hideMobile: true, render: (b) => `${ui.fmtDate(b.produced_on)} - ${b.shift.toLowerCase()}` }, { label: 'Godown', hideMobile: !ERP.godown.multiple, render: (b) => b.location_name },
+            { label: 'Made', hideMobile: true, render: (b) => [el('span.nowrap', { text: ui.fmtDate(b.produced_on) }), el('small.block.muted', { text: `${b.shift.toLowerCase()} shift` })] }, { label: 'Godown', hideMobile: !ERP.godown.multiple, render: (b) => b.location_name },
             { label: '', cls: 'a', render: (b) => L.btn('Open and test', 'flask', { kind: 'primary', onClick: () => showDetail(b.id) }) },
           ], rows: d.items, onRow: (b) => showDetail(b.id),
         }));
@@ -68,7 +68,7 @@ function mountHistory(panel, status) {
       return el('div.stack.tight', {}, ui.cardsTable({
         columns: [
           { label: 'Batch', cls: 'k', render: (b) => [el('b.nowrap', { text: b.batch_no }), el('small', { text: b.product_name })] }, { label: 'Decision', cls: 's', render: (b) => ui.badge(b.qc_status) },
-          { label: 'Quantity', cls: 'num', render: (b) => L.cratesCell(b.crates, b.crates_per_pallet, b.kind === 'RETURNABLE' ? 'jars' : 'crates') }, { label: 'Decided', render: (b) => (b.decided_at ? ui.fmtDateTime(b.decided_at) : '-') },
+          { label: 'Quantity', cls: 'num', render: (b) => L.cratesCell(b.crates, b.crates_per_pallet, b.kind === 'RETURNABLE' ? 'jars' : 'crates') }, { label: 'Decided', render: (b) => (b.decided_at ? el('span.nowrap', { text: ui.fmtDateTime(b.decided_at) }) : '-') },
           { label: 'Made', hideMobile: true, render: (b) => ui.fmtDate(b.produced_on) },
         ], rows: d.items, onRow: (b) => showDetail(b.id),
         emptyState: { icon: status === 'APPROVED' ? 'check-circle' : 'x-circle', title: `No ${status.toLowerCase()} batches yet` },
@@ -81,7 +81,8 @@ function mountHistory(panel, status) {
 /* ---------------------------------------------------------------------------------------------- detail */
 async function showDetail(id) {
   mode = 'detail'; openId = id; L.toTop();
-  try { history.replaceState(null, '', `?batch=${encodeURIComponent(id)}`); } catch { /* ignore */ }
+  L.enterSub(() => showList());
+  try { history.replaceState(history.state, '', `?batch=${encodeURIComponent(id)}`); } catch { /* ignore */ }
   ui.mount(view, ui.skeletonCards(3));
   let d;
   try { d = await api.get(`/api/qc/batches/${id}`); } catch (e) { ui.mount(view, L.backBar('QC queue', () => showList()), ui.errorState(e, () => showDetail(id))); return; }
