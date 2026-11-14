@@ -17,12 +17,12 @@ export function mountBatches(panel, ctx) {
   function showList() {
     inForm = false; formRefresh = null; L.clearSub(); L.toTop();
     const seg = ui.segmented({ options: QC_FILTERS, value: st.qc, label: 'QC status', onChange: (v) => { st.qc = v; st.offset = 0; load(); } });
-    const search = el('input.input', { type: 'search', placeholder: 'Search batch no or product', 'aria-label': 'Search batches', maxlength: 100, value: st.q });
+    const search = el('input.input', { type: 'search', placeholder: 'Search batch or product', 'aria-label': 'Search batches', maxlength: 100, value: st.q });
     search.addEventListener('input', ui.debounce(() => { st.q = search.value.trim(); st.offset = 0; load(); }, 350));
     const csv = L.btn('CSV', 'download', { kind: 'secondary', sm: true, onClick: () => L.guarded(csv, () => api.download('/api/production/batches', { query: { format: 'csv', qc_status: st.qc, q: st.q } })) });
     listHost = el('div');
     const sumHost = el('div');
-    const sum = ui.collapsible('Last 14 days - production summary', sumHost, { icon: 'dashboard' });
+    const sum = ui.collapsible('Last 14 days', sumHost, { icon: 'dashboard' });
     let sumLoaded = false;
     sum.addEventListener('toggle', () => { if (sum.open && !sumLoaded) { sumLoaded = true; loadSummary(sumHost); } });
     ui.mount(host, el('div.page-head', {}, el('div', {}, el('p.sub', { text: 'A batch turns bottles, caps, labels and minerals into crates waiting for Lab QC.' })), el('div.actions', {}, L.btn('New batch', 'plus', { onClick: () => showForm() }))),
@@ -51,7 +51,7 @@ export function mountBatches(panel, ctx) {
           { label: 'Batch', cls: 'k', render: (b) => [el('b.nowrap', { text: b.batch_no }), el('small', { text: b.product_name })] },
           { label: 'QC', cls: 's', render: (b) => ui.badge(b.qc_status, b.qc_status === 'QUARANTINE' ? 'Waiting for QC' : undefined) },
           { label: 'Made', cls: 'num', render: (b) => L.cratesCell(b.crates, b.crates_per_pallet, b.kind === 'RETURNABLE' ? 'jars' : 'crates') },
-          { label: 'Date', render: (b) => el('span.nowrap', { text: `${ui.fmtDate(b.produced_on)} - ${b.shift.toLowerCase()}` }) }, { label: 'Expiry', hideMobile: true, render: (b) => el('span.nowrap', { text: ui.fmtDate(b.expiry_date) }) },
+          { label: 'Date', render: (b) => [el('span.nowrap', { text: ui.fmtDate(b.produced_on) }), el('small.block.muted', { text: `${b.shift.toLowerCase()} shift` })] }, { label: 'Expiry', hideMobile: true, render: (b) => el('span.nowrap', { text: ui.fmtDate(b.expiry_date) }) },
           { label: 'Godown', hideMobile: true, render: (b) => b.location_name },
         ], rows: d.items, onRow: (b) => openBatch(b.id),
         emptyState: { icon: 'package', title: st.qc || st.q ? 'No batches match' : 'No batches yet', text: 'Press "New batch" when a filling run is done. It then waits for Lab QC to approve it.', action: st.qc || st.q ? null : { label: 'New batch', icon: 'plus', onClick: () => showForm() } },
