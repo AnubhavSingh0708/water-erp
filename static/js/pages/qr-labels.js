@@ -5,15 +5,8 @@ import { api } from '/js/api.js';
 import * as ui from '/js/ui.js';
 import { el, icon, cratesNode, crates, run, explain, svgNode, actionFor } from '/js/pages/loading-common.js';
 
-await boot({ page: 'qr-labels', title: 'QR labels', guard: false });
+await boot({ page: 'qr-labels', title: 'QR labels' });   // guard: users with the permission always get in; the page explains when the feature is off
 const main = document.getElementById('main');
-const permitted = ERP.me.is_admin || (ERP.me.allowed_pages || []).includes('qr-labels');
-if (!permitted) {
-  try { sessionStorage.setItem('erp.flash', JSON.stringify({ msg: 'You do not have access to QR labels.', type: 'warn' })); } catch { /* ignore */ }
-  const t = ERP.nav.firstAllowed(ERP.me); if (t.href !== location.pathname) location.replace(t.href);
-  else ui.mount(main, ui.errorState({ status: 403, message: 'You do not have access to this page.' }));
-  await new Promise(() => {});
-}
 
 function offState() {
   ui.mount(main, ui.empty({ icon: 'qr', title: 'QR labels are switched off', text: 'Loading works on stock by product and batch, so stickers are not needed. An administrator can enable them in Settings -> Features -> QR crate labels.',

@@ -60,6 +60,14 @@
 .load-info b.big { display: block; }
 .quick { margin-top: calc(-1 * var(--s2)); }
 .quick .chip-btn { min-height: 44px; padding: 0 var(--s3); font-size: .9rem; }
+.qa-intro { margin: 0; }
+.qa-row { background: var(--surface); }
+.qa-row .field > label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+.qa-row .qty-echo:empty { display: none; }
+.qa-row .quick { margin-top: 0; }
+.qa-plan { min-height: 1.3rem; line-height: 1.35; }
+.qa-plan:empty { display: none; }
+.qa-none { padding: var(--s2) 0; }
 .ld-check { display: grid; gap: var(--s2); min-height: 1.5rem; }
 
 /* settle */

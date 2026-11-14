@@ -223,21 +223,35 @@ export function promptDialog({ title, label, help, confirmText = 'Save', min = 0
   return dlg.closed.then((r) => (typeof r === 'string' ? r : null));
 }
 
+/** unitLabel('containers', 1) -> 'container'; unitLabel({one:'box', other:'boxes'}, 2) -> 'boxes'. No unit -> ''. */
+export function unitLabel(unit, n) {
+  if (!unit) return '';
+  const one = Math.abs(toNum(n)) === 1;
+  if (typeof unit === 'object') return (one ? unit.one : (unit.other || unit.many)) || unit.one || '';
+  return one && /[a-z]s$/i.test(unit) && !/ss$/i.test(unit) ? unit.slice(0, -1) : unit;
+}
+
 /**
- * reviewSheet({title, effects:[{item,zone,delta,after,unit}], warnings:[], confirmText, summary}) -> Promise<boolean>
- * Shows what the dry run says will happen BEFORE the real submit.
+ * reviewSheet({title, effects:[{item,zone,delta,after,unit,note,right}], warnings:[], confirmText, cancelText, summary, intro,
+ *              before:Node, after:Node, unit:'crates'|{one,other}, decimals, emptyText, danger}) -> Promise<boolean>
+ * Shows what the dry run says will happen BEFORE the real submit. `before` / `after` are extra nodes above / below the
+ * stock effects (item lists, vehicle papers, notes); `unit` is the default unit (singular when |delta| = 1); `decimals` default 4.
  */
-export function reviewSheet({ title = 'Review before saving', effects = [], warnings = [], confirmText = 'Confirm and save', summary, danger = false } = {}) {
+export function reviewSheet({ title = 'Review before saving', effects = [], warnings = [], confirmText = 'Confirm and save', cancelText = 'Go back and edit', summary, intro, before, after, unit, decimals = 4, emptyText = 'No stock changes.', danger = false } = {}) {
   const list = effects.length ? el('div.effects', {}, effects.map((e) => {
     const d = toNum(e.delta);
-    return el('div.effect', {}, el('div', {}, el('b', { text: e.item_name || e.item || '' }), el('small', { text: [e.zone, e.after !== undefined && e.after !== null ? `will be ${fmtNum(e.after, 4)}` : ''].filter(Boolean).join(' - ') })),
-      el('span.delta', { class: d < 0 ? 'neg' : 'pos' }, `${d > 0 ? '+' : ''}${fmtNum(e.delta, 4)}${e.unit ? ' ' + e.unit : ''}`));
-  })) : el('p.muted', { text: 'No stock changes.' });
-  const body = el('div.stack', {}, summary ? el('p', { text: summary }) : null, list,
-    warnings.length ? el('div.banner.warn.inline', {}, icon('alert'), el('ul.warn-list', {}, warnings.map((w) => el('li', { text: String(w) })))) : null);
+    const u = unitLabel(e.unit || unit, d);
+    const moves = Number.isFinite(d) && d !== 0;
+    const sub = [e.zone, moves && e.after !== undefined && e.after !== null ? `will be ${fmtNum(e.after, decimals)}` : '', e.note].filter(Boolean).join(' - ');
+    return el('div.effect', {}, el('div.grow', {}, el('b', { text: e.item_name || e.item || '' }), sub ? el('small', { text: sub }) : null),
+      moves ? el('span.delta', { class: d < 0 ? 'neg' : 'pos' }, `${d > 0 ? '+' : '-'}${fmtNum(Math.abs(d), decimals)}${u ? ' ' + u : ''}`) : (e.right ? el('span.delta', { text: String(e.right) }) : null));
+  })) : el('p.muted', { text: emptyText });
+  const body = el('div.stack', {}, summary || intro ? el('p', { text: summary || intro }) : null, before || null, list,
+    warnings.length ? el('div.banner.warn.inline', {}, icon('alert'), el('ul.warn-list', {}, warnings.map((w) => el('li', { text: String(w) })))) : null, after || null);
   const yes = el('button.btn', { type: 'button', class: danger ? 'danger' : 'primary', on: { click: () => dlg.close(true) } }, confirmText);
-  const no = el('button.btn.secondary', { type: 'button', on: { click: () => dlg.close(false) } }, 'Go back and edit');
+  const no = el('button.btn.secondary', { type: 'button', on: { click: () => dlg.close(false) } }, cancelText);
   const dlg = openDialog({ title, body, actions: [no, yes] });
+  (danger ? no : yes).focus();
   return dlg.closed.then((r) => r === true);
 }
 
@@ -430,21 +444,26 @@ export function progress(pct, tone) {
 /* ---------------------------------------------------------------- quantity input with live echo */
 /**
  * qtyInput({name, label, unit, min=0, max, decimals=0, value, cratesPerPallet, onInput, help, required})
- * -> {el, input, get value(): number|null, get raw(), set(v), valid}
+ * -> {el, input, get value(): number|null, get raw(), set(v), valid, max, setMax(n|null), setUnit(u)}
+ * `unit` may be 'containers' (singular derived: "1 container") or {one:'box', other:'boxes'}.
  * For crates (decimals 0 + cratesPerPallet): live "= 2 pallets + 10 crates" echo plus a "Pallets + crates" entry mode.
- * Always shows "Check: you entered N" so a typo like 1200 vs 120 is visible; clamps to [min,max] on blur.
+ * Always shows "Check: you entered N" so a typo like 1200 vs 120 is visible; clamps to [min,max] on blur and on the +/- buttons.
+ * setMax() updates the limit later (e.g. when the free stock changes); the echo turns red when the value is over it.
  */
 export function qtyInput(o) {
   const dp = o.decimals ?? 0; const cpp = toNum(o.cratesPerPallet) || 0;
+  let max = o.max === undefined || o.max === null || !Number.isFinite(Number(o.max)) ? null : Number(o.max);
+  let unitSpec = o.unit;
   const id = `q-${o.name}-${Math.random().toString(36).slice(2, 6)}`;
   const input = el('input.input', { id, name: o.name, type: 'text', inputmode: dp ? 'decimal' : 'numeric', autocomplete: 'off', placeholder: o.placeholder ?? '0', 'aria-describedby': `${id}-echo ${id}-err`, required: o.required ? true : undefined });
   input.value = o.value ?? '';
   const parse = () => { const n = toNum(input.value); return Number.isFinite(n) ? n : null; };
   const echo = el('div.qty-echo', { id: `${id}-echo`, 'aria-live': 'polite' });
   const err = el('p.error', { id: `${id}-err`, role: 'alert' });
+  const lo = () => o.min ?? 0;
   const clamp = () => {
     let n = parse(); if (n === null) return;
-    const lo = o.min ?? 0; if (n < lo) n = lo; if (o.max !== undefined && o.max !== null && n > o.max) n = o.max;
+    if (n < lo()) n = lo(); if (max !== null && n > max) n = max;
     n = dp ? Math.round(n * 10 ** dp) / 10 ** dp : Math.round(n); input.value = String(n);
   };
   const refresh = () => {
@@ -452,14 +471,14 @@ export function qtyInput(o) {
     if (input.value.trim() === '') return;
     if (n === null || n < 0) { echo.classList.add('bad'); echo.append(el('span.chip', { text: 'Enter a valid number' })); return; }
     if (!dp && !Number.isInteger(n)) { echo.classList.add('bad'); echo.append(el('span.chip', { text: 'Whole numbers only' })); return; }
-    if (o.max !== undefined && o.max !== null && n > o.max) { echo.classList.add('bad'); echo.append(el('span.chip', { text: `More than the maximum (${fmtNum(o.max, dp)})` })); return; }
-    const unit = o.unit || (cpp ? 'crates' : '');
-    echo.append('Check: you entered ', el('b', { text: fmtNum(n, dp) + (unit ? ' ' + unit : '') }));
+    if (max !== null && n > max) { echo.classList.add('bad'); echo.append(el('span.chip', { text: `More than the maximum (${fmtNum(max, dp)})` })); return; }
+    const u = unitLabel(unitSpec || (cpp ? 'crates' : ''), n);
+    echo.append('Check: you entered ', el('b', { text: fmtNum(n, dp) + (u ? ' ' + u : '') }));
     if (cpp && !dp) echo.append(el('span.chip', { text: '= ' + fmtCrates(n, cpp) }));
   };
   input.addEventListener('input', () => { setFieldError(root, ''); refresh(); if (o.onInput) o.onInput(parse()); });
   input.addEventListener('blur', () => { clamp(); refresh(); if (o.onInput) o.onInput(parse()); });
-  const step = (d) => { const n = (parse() ?? 0) + d * (dp ? 1 : 1); input.value = String(Math.max(o.min ?? 0, o.max !== undefined && o.max !== null ? Math.min(o.max, n) : n)); input.dispatchEvent(new Event('input', { bubbles: true })); };
+  const step = (d) => { const n = (parse() ?? 0) + d; input.value = String(Math.max(lo(), max !== null ? Math.min(max, n) : n)); input.dispatchEvent(new Event('input', { bubbles: true })); };
   const stepper = el('div.stepper', {}, el('button.btn.secondary', { type: 'button', 'aria-label': 'Decrease', on: { click: () => step(-1) } }, icon('minus')), input,
     el('button.btn.secondary', { type: 'button', 'aria-label': 'Increase', on: { click: () => step(1) } }, icon('plus')));
   // pallets + loose crates entry mode
@@ -479,8 +498,12 @@ export function qtyInput(o) {
   return {
     el: root, input, error: err,
     get value() { return parse(); }, get raw() { return input.value; },
+    get max() { return max; },
     set(v) { input.value = v ?? ''; refresh(); },
-    get valid() { const n = parse(); return n !== null && n >= (o.min ?? 0) && (o.max === undefined || o.max === null || n <= o.max) && (dp || Number.isInteger(n)); },
+    setMax(v) { max = v === undefined || v === null || !Number.isFinite(Number(v)) ? null : Number(v); refresh(); },
+    setUnit(u) { unitSpec = u; refresh(); },
+    clamp() { clamp(); refresh(); },
+    get valid() { const n = parse(); return n !== null && n >= lo() && (max === null || n <= max) && (dp || Number.isInteger(n)); },
   };
 }
 

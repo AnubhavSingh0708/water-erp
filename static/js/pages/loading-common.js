@@ -50,24 +50,9 @@ export function svgNode(markup) {
  * Shows what will happen: one row per stock effect (friendly zone name, signed crates), warnings, optional extra nodes.
  * Resolves true only on the explicit confirm button.
  */
-export function reviewDialog({ title = 'Review before saving', intro, before, after, effects = [], warnings = [], confirmText = 'Confirm', cancelText = 'Go back and edit', danger = false, unit = 'crates', emptyText = 'No stock changes.' } = {}) {
-  const rows = effects.filter((e) => e && (ui.toNum(e.delta) !== 0 || e.note)).map((e) => {
-    const d = ui.toNum(e.delta);
-    const zone = ZONE_LABEL[e.zone] || e.zone || '';
-    const sub = [zone, e.after !== undefined && e.after !== null && d !== 0 ? `${ui.fmtNum(e.after, 0)} after` : '', e.note].filter(Boolean).join(' - ');
-    return el('div.effect', {}, el('div.grow', {}, el('b', { text: e.item_name || e.item || '' }), el('small', { text: sub })),
-      d !== 0 ? el('span.delta', { class: d < 0 ? 'neg' : 'pos' }, `${d > 0 ? '+' : '-'}${ui.fmtNum(Math.abs(d), 0)} ${Math.abs(d) === 1 ? unit.replace(/s$/, '') : unit}`) : null);
-  });
-  const body = el('div.stack', {},
-    intro ? el('p', { text: intro }) : null, before || null,
-    rows.length ? el('div.effects', {}, rows) : el('p.muted', { text: emptyText }),
-    warnings && warnings.length ? el('div.banner.warn.inline', {}, icon('alert'), el('ul.warn-list', {}, warnings.map((w) => el('li', { text: String(w) })))) : null,
-    after || null);
-  const yes = el('button.btn', { type: 'button', class: danger ? 'danger' : 'primary', on: { click: () => dlg.close(true) } }, confirmText);
-  const no = el('button.btn.secondary', { type: 'button', on: { click: () => dlg.close(false) } }, cancelText);
-  const dlg = ui.openDialog({ title, body, actions: [no, yes] });
-  (danger ? no : yes).focus();
-  return dlg.closed.then((r) => r === true);
+export function reviewDialog({ title = 'Review before saving', intro, before, after, effects = [], warnings = [], confirmText = 'Confirm', cancelText = 'Go back and edit', danger = false, unit = 'crates', emptyText = 'No stock changes.', mapEffects } = {}) {
+  const rows = effects.filter((e) => e && (ui.toNum(e.delta) !== 0 || e.note)).map((e) => ({ ...e, zone: ZONE_LABEL[e.zone] || e.zone || '' })).map((e) => (mapEffects ? mapEffects(e) : e));
+  return ui.reviewSheet({ title, intro, before, after, effects: rows, warnings, confirmText, cancelText, danger, unit, decimals: 0, emptyText });
 }
 
 /**

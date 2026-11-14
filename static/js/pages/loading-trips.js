@@ -2,6 +2,7 @@
 // gate pass (dry-run review -> confirm), cancel, void, on-the-road / settled / cancelled summaries.
 import { api } from '/js/api.js';
 import * as ui from '/js/ui.js';
+import { createQuickAdd } from '/js/pages/loading-quick.js';
 import { el, icon, cratesNode, crates, capacityBar, run, explain, dryRunReview, getVehicles, daysBetween, actionFor } from '/js/pages/loading-common.js';
 
 const DOCS = [['insurance_expiry', 'Insurance'], ['fitness_expiry', 'Fitness'], ['puc_expiry', 'PUC'], ['permit_expiry', 'Permit']];
@@ -15,7 +16,8 @@ export async function mountTrip(host, { id, ctx }) {
   const back = el('button.btn.ghost.sm.back', { type: 'button', on: { click: () => ctx.go('trips') } }, icon('chevron-left', 'sm'), 'All trips');
   const noteBox = el('div.stack.tight.ld-notes', { 'aria-live': 'polite' });
   const headBox = el('div'); const itemsBox = el('div'); const availBox = el('div'); const barBox = el('div');
-  host.append(back, noteBox, headBox, itemsBox, availBox, barBox);
+  const quick = createQuickAdd({ tripId: id, getTrip: () => trip, getAvail: () => avail, onAdded: async (res) => { if (res && res.trip) trip = res.trip; await loadAvail(false).catch(() => {}); if (res) { renderAll(); } else await refresh(false); } });
+  host.append(back, noteBox, headBox, itemsBox, quick.el, availBox, barBox);
 
   /* ------------------------------------------------------------ data */
   async function loadTrip() {
@@ -44,7 +46,7 @@ export async function mountTrip(host, { id, ctx }) {
 
   /* ------------------------------------------------------------ render */
   function renderAll() {
-    renderHead(); renderItems(); renderAvail(); renderBar();
+    renderHead(); renderItems(); quick.update(); renderAvail(); renderBar();
     if (trip.status !== lastStatus) { lastStatus = trip.status; if (trip.status === 'LOADING' && ctx.pendingQr && ctx.qrOn() && !sheet) { const c = ctx.pendingQr; ctx.pendingQr = null; openScan(c); } }
   }
   function docStrip() {
@@ -74,7 +76,7 @@ export async function mountTrip(host, { id, ctx }) {
     const settled = trip.status === 'SETTLED';
     return el('li.item-row', {},
       el('div.grow', {}, el('b', { text: it.product_name }),
-        el('div.small.muted', { text: `${it.batch_no} - exp ${ui.fmtDate(it.expiry_date)}${it.set_label ? ` - label ${it.set_label}` : ''}` }),
+        el('div.small.muted', {}, el('span.nowrap', { text: it.batch_no }), ` - exp ${ui.fmtDate(it.expiry_date)}${it.set_label ? ` - label ${it.set_label}` : ''}`),
         settled ? el('div.small', { text: `Delivered ${ui.fmtNum(it.crates_delivered, 0)} - returned ${ui.fmtNum(it.crates_returned, 0)} - damaged ${ui.fmtNum(it.crates_damaged, 0)}` }) : null,
         it.qc_status !== 'APPROVED' ? el('div', {}, ui.badge(it.qc_status, `${it.qc_status} - not QC approved`)) : null),
       el('div.item-qty', {}, el('b', {}, cratesNode(it.crates, it.crates_per_pallet)), trip.status === 'LOADING' ? el('button.btn.ghost.sm.icon', { type: 'button', 'aria-label': `Remove ${it.product_name} ${it.batch_no} from trip`, on: { click: () => removeItem(it) } }, icon('trash', 'sm')) : null));
@@ -99,7 +101,7 @@ export async function mountTrip(host, { id, ctx }) {
     avail.forEach((r) => { if (!seen.has(r.product_id) && r.available > 0) { seen.add(r.product_id); firstOf.add(r.batch_id); } });
     const scanBtn = ctx.qrOn() ? el('button.btn.secondary.sm', { type: 'button', on: { click: () => openScan() } }, icon('qr', 'sm'), 'Scan label') : null;
     ui.mount(availBox, el('section.card.pad0', {},
-      el('div.card-head', {}, el('h2', {}, icon('warehouse'), 'Add stock'), scanBtn),
+      el('div.card-head', {}, el('h2', {}, icon('warehouse'), 'Add a specific batch'), scanBtn),
       el('div.av-wrap', {},
         !strict() ? el('div.banner.warn.inline', {}, icon('alert'), el('div.grow', { text: 'Strict QC lock is off: batches that are not yet approved are listed with a warning.' })) : null,
         products.length > 1 ? el('div.chips.av-filter', { role: 'group', 'aria-label': 'Filter by product' }, [['ALL', 'All products'], ...products].map(([pid, name]) => el('button.chip-btn', { type: 'button', 'aria-pressed': String(product === pid), on: { click: () => { product = pid; renderAvail(); } } }, name))) : null,
@@ -108,7 +110,7 @@ export async function mountTrip(host, { id, ctx }) {
   function availRow(r, oldest) {
     const ch = changed.get(r.batch_id); const none = r.available <= 0;
     return el('article.av-row', { class: [none ? 'none' : '', r.qc_status !== 'APPROVED' ? 'unapproved' : ''].join(' ').trim(), dataset: { batch: r.batch_id } },
-      el('div.av-top', {}, el('div.grow', {}, el('b', { text: r.product_name }), el('div.small.muted', { text: `${r.batch_no} - exp ${ui.fmtDate(r.expiry_date)}` })),
+      el('div.av-top', {}, el('div.grow', {}, el('b', { text: r.product_name }), el('div.small.muted', {}, el('span.nowrap', { text: r.batch_no }), ` - exp ${ui.fmtDate(r.expiry_date)}`)),
         el('div.av-badges', {}, oldest ? ui.badge('INFO', 'Oldest first', 'info') : null, r.qc_status !== 'APPROVED' ? ui.badge(r.qc_status, `${r.qc_status} - not QC approved`) : null)),
       el('div.av-free', {}, el('div', {}, el('span.muted.small', { text: 'Free to load ' }), el('b.big', {}, cratesNode(r.available, r.crates_per_pallet))),
         el('div.small.muted', { text: [`${ui.fmtNum(r.fg_ready, 0)} on hand`, r.reserved ? `${ui.fmtNum(r.reserved, 0)} reserved by open trips` : '', r.in_trip ? `${ui.fmtNum(r.in_trip, 0)} on this trip` : ''].filter(Boolean).join(' - ') })),

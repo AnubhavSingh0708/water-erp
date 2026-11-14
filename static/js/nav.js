@@ -18,13 +18,18 @@ export const PAGES = [
 ];
 export const PROFILE = { key: 'profile', href: '/profile.html', label: 'My profile', short: 'Profile', icon: 'user' };
 
-export function isAllowed(me, def) {
+/** Permission only (ignores the QR feature flag): may this user open the page if the feature were on? */
+export function isPermitted(me, def) {
   if (!me) return false;
   if (def.key === 'profile') return true;
   if (def.adminOnly) return !!me.is_admin;
-  if (def.needsQr && !config.qrLabels) return false;
   const perm = def.perm || def.key;
   return !!me.is_admin || (me.allowed_pages || []).includes(perm);
+}
+/** Shown in menus: permitted AND (for QR pages) the QR feature is on. */
+export function isAllowed(me, def) {
+  if (def.needsQr && !config.qrLabels) return false;
+  return isPermitted(me, def);
 }
 export const visiblePages = (me) => PAGES.filter((p) => isAllowed(me, p));
 export function firstAllowed(me) { const v = visiblePages(me).filter((p) => !p.child); return v.length ? v[0] : PROFILE; }
@@ -34,7 +39,8 @@ export function guard(me, pageKey) {
   if (pageKey === 'profile' || pageKey === 'public') return true;
   const def = PAGES.find((p) => p.key === pageKey);
   if (!def) return true;
-  if (isAllowed(me, def)) return true;
+  // needsQr pages: a permitted user always gets in; the page itself explains that the feature is switched off
+  if (def.needsQr ? isPermitted(me, def) : isAllowed(me, def)) return true;
   const target = firstAllowed(me);
   try { sessionStorage.setItem('erp.flash', JSON.stringify({ msg: `You do not have access to ${def.label}.`, type: 'warn' })); } catch { /* ignore */ }
   if (target.href !== location.pathname) location.replace(target.href);
