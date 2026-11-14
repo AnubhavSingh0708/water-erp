@@ -57,7 +57,7 @@ export function mountBlow(panel, ctx) {
       else if (i !== null && i > have) { tone = 'bad'; icn = 'alert'; msg = `You entered ${ui.fmtNum(i, 0)} ${unit} but only ${ui.fmtNum(have, 0)} ${unit} are in stock${where}. Check the number, or ask the store to receive more preforms.`; }
       else if (min > 0 && have - (i || 0) <= min) { tone = 'warn'; icn = 'alert'; msg = i ? `Only ${ui.fmtNum(have - i, 0)} ${unit} will be left after this run - at or below the minimum of ${ui.fmtNum(min, 0)}. Tell the store to reorder.` : `Low stock - the minimum is ${ui.fmtNum(min, 0)} ${unit}. Tell the store to reorder.`; }
       avail.classList.add(tone);
-      avail.append(icon(icn, 'sm'), el('div.grow', {}, el('b', { text: `Available: ${ui.fmtNum(have, 0)} ${unit}` }), el('span.small', { text: ` ${stock.name || ''}${where}` }), msg ? el('div.small.avail-msg', { text: msg }) : null));
+      avail.append(icon(icn, 'sm'), el('div.grow', {}, el('b.block', { text: `Available: ${ui.fmtNum(have, 0)} ${unit}` }), el('span.small.block', { text: `${stock.name || ''}${where}` }), msg ? el('div.small.avail-msg', { text: msg }) : null));
     }
     async function checkStock({ force = false } = {}) {
       const site = ctx.site(); const pre = preSel.get();
