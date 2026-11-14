@@ -78,7 +78,7 @@ export function openScanner({ trip, ctx, code, onAdded, refresh, onClose }) {
   function stop() { running = false; cancelAnimationFrame(raf); if (stream) stream.getTracks().forEach((t) => t.stop()); stream = null; track = null; torchOn = false; if (video) video.srcObject = null; frame.hidden = true; }
   async function toggleTorch() { if (!track) return; torchOn = !torchOn; try { await track.applyConstraints({ advanced: [{ torch: torchOn }] }); torchBtn.setAttribute('aria-pressed', String(torchOn)); } catch { torchOn = false; ui.toast.warn('The light is not available on this camera'); } }
   function switchCamera() { if (devices.length < 2) return; devIdx = (devIdx + 1) % devices.length; startCamera(devices[devIdx].deviceId); }
-  let last = 0;
+  let last = 0; let frameNo = 0;
   async function loop() {
     if (!running) return;
     raf = requestAnimationFrame(loop);
@@ -87,9 +87,14 @@ export function openScanner({ trip, ctx, code, onAdded, refresh, onClose }) {
     try {
       if (detector) { const r = await detector.detect(video); if (r && r[0]) text = r[0].rawValue; }
       else if (window.jsQR) {
-        const w = Math.min(640, video.videoWidth || 640); const h = Math.round(w * ((video.videoHeight || 480) / (video.videoWidth || 640)));
-        canvas.width = w; canvas.height = h; const c = canvas.getContext('2d', { willReadFrequently: true }); c.drawImage(video, 0, 0, w, h);
-        const img = c.getImageData(0, 0, w, h); const r = window.jsQR(img.data, w, h, { inversionAttempts: 'dontInvert' }); if (r) text = r.data;
+        // Phones deliver 720p-1080p frames: scan the middle (where the aim box is) at near-native resolution, and the whole frame now and then.
+        const vw = video.videoWidth || 640, vh = video.videoHeight || 480;
+        const scan = (sx, sy, sw, sh, maxW) => {
+          const k = Math.min(1, maxW / sw); const w = Math.max(1, Math.round(sw * k)), h = Math.max(1, Math.round(sh * k));
+          canvas.width = w; canvas.height = h; const c = canvas.getContext('2d', { willReadFrequently: true }); c.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
+          const r = window.jsQR(c.getImageData(0, 0, w, h).data, w, h, { inversionAttempts: 'dontInvert' }); return r ? r.data : '';
+        };
+        text = scan(vw * 0.15, vh * 0.15, vw * 0.7, vh * 0.7, 720) || (frameNo++ % 3 === 0 ? scan(0, 0, vw, vh, 640) : '');
       }
     } catch { /* a bad frame is fine */ }
     if (text && !paused) { paused = true; if (navigator.vibrate) navigator.vibrate(60); find(text); }
