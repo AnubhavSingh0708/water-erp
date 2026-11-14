@@ -57,7 +57,9 @@ async fn settlement_records_deliveries_unassigned_and_reads_back(pool: PgPool) {
     assert_eq!(v["status"], "SETTLED");
     let cd = v["customer_deliveries"].as_array().unwrap();
     assert_eq!(cd.len(), 3, "{v}");
-    assert_eq!((cd[0]["customer_name"].as_str(), cd[0]["crates"].as_i64(), cd[0]["pallets"].as_i64(), cd[0]["loose_crates"].as_i64()), (Some("Alpha"), Some(25), Some(2), Some(5)), "{v}");
+    // (both test products share a name, so pick the row by product instead of by position)
+    let a1 = cd.iter().find(|d| d["customer_name"] == "Alpha" && d["product_id"] == json!(p1)).unwrap();
+    assert_eq!((a1["crates"].as_i64(), a1["pallets"].as_i64(), a1["loose_crates"].as_i64()), (Some(25), Some(2), Some(5)), "{v}");
     let un: Vec<(String, i64, i64, i64)> = v["unassigned_crates"].as_array().unwrap().iter()
         .map(|u| (u["product_id"].as_str().unwrap().to_string(), u["delivered"].as_i64().unwrap(), u["assigned"].as_i64().unwrap(), u["unassigned"].as_i64().unwrap())).collect();
     assert_eq!(un.len(), 2, "returnable containers are not part of the bottled split: {v}");
