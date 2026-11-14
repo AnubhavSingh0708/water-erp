@@ -34,7 +34,7 @@ function mountTransfers(panel, status) {
       return el('div.stack.tight', {}, d.items.some((t) => t.overdue) ? L.banner('err', 'alert', el('b', { text: 'Some transfers have been on the road for more than 48 hours. ' }), 'Call the driver or the receiving godown.') : null,
         ui.cardsTable({
           columns: [
-            { label: 'Transfer', cls: 'k', render: (t) => [el('b', { text: t.tf_no }), el('small', { text: `${t.from_name} to ${t.to_name}` })] },
+            { label: 'Transfer', cls: 'k', render: (t) => [el('b.nowrap', { text: t.tf_no }), el('small', { text: `${t.from_name} to ${t.to_name}` })] },
             { label: 'Status', cls: 's', render: (t) => [ui.badge(t.status), t.overdue ? el('div', { style: { marginTop: '4px', textAlign: 'right' } }, ui.badge('OVERDUE', 'Over 48 h')) : null] },
             { label: 'Sent', render: (t) => [ui.fmtDate(t.created_at), el('small.block.muted', { text: ui.fmtRelative(t.created_at) })] }, { label: 'Items', cls: 'num', render: (t) => `${t.lines_count} ${Number(t.lines_count) === 1 ? 'line' : 'lines'}` },
             { label: 'Vehicle', hideMobile: true, render: (t) => t.vehicle_no || '-' }, { label: 'Received', hideMobile: true, render: (t) => (t.received_at ? ui.fmtDateTime(t.received_at) : '-') },

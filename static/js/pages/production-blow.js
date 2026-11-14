@@ -137,7 +137,7 @@ export function mountBlow(panel, ctx) {
       const warn = Number(L.settings().scrap_warn_pct ?? 5);
       return el('div.stack.tight', {}, ui.cardsTable({
         columns: [
-          { label: 'Run', cls: 'k', render: (r) => [el('b', { text: r.run_no }), el('small', { text: `${ui.fmtDate(r.run_date)} - ${r.shift.toLowerCase()}${r.equipment_name ? ` - ${r.equipment_name}` : ''}` })] },
+          { label: 'Run', cls: 'k', render: (r) => [el('b.nowrap', { text: r.run_no }), el('small', { text: `${ui.fmtDate(r.run_date)} - ${r.shift.toLowerCase()}${r.equipment_name ? ` - ${r.equipment_name}` : ''}` })] },
           { label: 'Scrap', cls: 's', render: (r) => (ui.toNum(r.scrap_pct) > warn ? ui.badge('WARNING', `${ui.fmtNum(r.scrap_pct, 2)} %`) : ui.badge('OK', `${ui.fmtNum(r.scrap_pct, 2)} %`)) },
           { label: 'Preforms in', cls: 'num', render: (r) => `${ui.fmtNum(r.preforms_issued, 0)} ${r.preform_name ? '' : ''}pcs` }, { label: 'Good bottles', cls: 'num', render: (r) => `${ui.fmtNum(r.good_bottles, 0)} pcs` },
           { label: 'Scrap', cls: 'num', render: (r) => `${ui.fmtNum(r.scrap_pcs, 0)} pcs${r.scrap_weight_kg ? ` (${ui.fmtNum(r.scrap_weight_kg, 2)} kg)` : ''}` },

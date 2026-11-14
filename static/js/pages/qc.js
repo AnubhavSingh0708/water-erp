@@ -47,7 +47,7 @@ function mountQueue(panel) {
       return el('div.stack', {}, d.items.some((b) => b.age_minutes >= 480) ? L.banner('err', 'alert', el('b', { text: 'Some batches have waited more than 8 hours. ' }), 'Test the oldest first - stock is locked until QC decides.') : null,
         ui.cardsTable({
           columns: [
-            { label: 'Batch', cls: 'k', render: (b) => [el('b', { text: b.batch_no }), el('small', { text: b.product_name })] },
+            { label: 'Batch', cls: 'k', render: (b) => [el('b.nowrap', { text: b.batch_no }), el('small', { text: b.product_name })] },
             { label: 'Waiting', cls: 's', render: (b) => ageBadge(b.age_minutes) },
             { label: 'Quantity', cls: 'num', render: (b) => L.cratesCell(b.crates, b.crates_per_pallet, b.kind === 'RETURNABLE' ? 'jars' : 'crates') },
             { label: 'Lab test', render: (b) => [testBadge(b.last_test_result), b.tests_count > 1 ? el('small.block.muted', { text: `${b.tests_count} tests` }) : null] },
@@ -66,7 +66,7 @@ function mountHistory(panel, status) {
       const d = await api.get('/api/qc/batches', { status, limit: 15, offset, ...L.readParam() });
       return el('div.stack.tight', {}, ui.cardsTable({
         columns: [
-          { label: 'Batch', cls: 'k', render: (b) => [el('b', { text: b.batch_no }), el('small', { text: b.product_name })] }, { label: 'Decision', cls: 's', render: (b) => ui.badge(b.qc_status) },
+          { label: 'Batch', cls: 'k', render: (b) => [el('b.nowrap', { text: b.batch_no }), el('small', { text: b.product_name })] }, { label: 'Decision', cls: 's', render: (b) => ui.badge(b.qc_status) },
           { label: 'Quantity', cls: 'num', render: (b) => L.cratesCell(b.crates, b.crates_per_pallet, b.kind === 'RETURNABLE' ? 'jars' : 'crates') }, { label: 'Decided', render: (b) => (b.decided_at ? ui.fmtDateTime(b.decided_at) : '-') },
           { label: 'Made', hideMobile: true, render: (b) => ui.fmtDate(b.produced_on) },
         ], rows: d.items, onRow: (b) => showDetail(b.id),

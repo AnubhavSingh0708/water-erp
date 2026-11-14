@@ -37,12 +37,12 @@ export function mountActions(panel, ctx) {
     await Promise.all([
       run(cntHost, async () => {
         const d = await api.get('/api/warehouse/counts', { limit: 6, ...L.readParam() });
-        return ui.cardsTable({ columns: [{ label: 'Count', cls: 'k', render: (c) => [el('b', { text: c.cnt_no }), el('small', { text: `${L.zoneLabel(c.zone)} - ${ui.fmtDate(c.created_at)}` })] }, { label: 'Status', cls: 's', render: (c) => ui.badge(c.status === 'POSTED' ? 'DONE' : c.status === 'DRAFT' ? 'DRAFT' : 'CANCELLED', c.status === 'DRAFT' ? 'In progress' : undefined) },
+        return ui.cardsTable({ columns: [{ label: 'Count', cls: 'k', render: (c) => [el('b.nowrap', { text: c.cnt_no }), el('small', { text: `${L.zoneLabel(c.zone)} - ${ui.fmtDate(c.created_at)}` })] }, { label: 'Status', cls: 's', render: (c) => ui.badge(c.status === 'POSTED' ? 'DONE' : c.status === 'DRAFT' ? 'DRAFT' : 'CANCELLED', c.status === 'DRAFT' ? 'In progress' : undefined) },
           { label: 'Counted', cls: 'num', render: (c) => `${c.counted_lines} of ${c.total_lines} lines` }], rows: d.items, onRow: (c) => openCount(c.id), emptyState: { icon: 'clipboard', title: 'No counts yet', text: 'Start a count to check what is really on the shelves.' } });
       }),
       run(woHost, async () => {
         const d = await api.get('/api/warehouse/write-offs', { limit: 8, ...L.readParam() });
-        return ui.cardsTable({ columns: [{ label: 'Voucher', cls: 'k', render: (w) => [el('b', { text: w.wo_no }), el('small', { text: `${w.item_name} - ${ui.fmtDate(w.created_at)}` })] }, { label: 'Reason', cls: 's', render: (w) => el('span.chip-s', { text: WO_LABEL[w.reason_code] || w.reason_code }) },
+        return ui.cardsTable({ columns: [{ label: 'Voucher', cls: 'k', render: (w) => [el('b.nowrap', { text: w.wo_no }), el('small', { text: `${w.item_name} - ${ui.fmtDate(w.created_at)}` })] }, { label: 'Reason', cls: 's', render: (w) => el('span.chip-s', { text: WO_LABEL[w.reason_code] || w.reason_code }) },
           { label: 'Quantity', cls: 'num', render: (w) => `${ui.fmtNum(w.qty, 4)}${w.item_type === 'PRODUCT' ? ' crates' : ''}` }, { label: 'From', render: (w) => L.zoneLabel(w.zone) }, { label: 'By', hideMobile: true, render: (w) => w.created_by_name }],
         rows: d.items, onRow: (w) => openVoucher(w.id), emptyState: { icon: 'trash', title: 'No write-offs', text: 'Written-off stock is listed here with its reason.' } });
       }),

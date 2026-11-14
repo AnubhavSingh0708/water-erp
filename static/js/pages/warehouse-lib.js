@@ -528,7 +528,7 @@ export function errorDialog(e, title = 'Could not do that') {
 /** Material option label with its unit conversion, e.g. "Cap 28 mm (bag = 5,000 pcs)". */
 export const materialLabel = (m) => `${m.name} (${m.purchase_unit}${ui.toNum(m.stock_per_purchase_unit) !== 1 ? ` = ${ui.fmtNum(m.stock_per_purchase_unit, 4)} ${m.stock_unit}` : ''})`;
 /** Numeric text input with a unit suffix and an echo line; returns {field, el, input, echo(text,tone), get(), set()}. */
-export function unitInput({ name, label, unit, placeholder = '0', required = false, inputmode = 'decimal', help }) {
+export function unitInput({ name, label, unit, placeholder = '', required = false, inputmode = 'decimal', help }) {
   const f = ui.field({ label, name, type: 'text', inputmode, placeholder, unit: unit || ' ', required, help });
   const echo = el('div.echo', { 'aria-live': 'polite' });
   f.el.insertBefore(echo, f.el.querySelector('.error'));

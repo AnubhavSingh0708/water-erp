@@ -26,7 +26,7 @@ function mountOverview(panel) {
       return el('div.stack', {}, scopeNote(),
         el('div.stat-grid', {}, zoneTiles),
         el('section.card.pad0', {}, el('div.card-head', {}, el('h2', {}, icon('package'), 'Finished goods')),
-          el('div', { style: { padding: '0 var(--s4) var(--s4)' } }, ui.cardsTable({
+          el('div.inset', {}, ui.cardsTable({
             columns: [
               { label: 'Product', cls: 'k', render: (p) => [el('b', { text: p.name }), el('small', { text: p.kind === 'RETURNABLE' ? 'Returnable jar' : 'Bottled' })] },
               { label: 'Ready to load', cls: 'num', render: (p) => L.cratesCell(p.fg_ready, p.crates_per_pallet, p.kind === 'RETURNABLE' ? 'jars' : 'crates') },
@@ -36,11 +36,11 @@ function mountOverview(panel) {
             ],
             rows: prods, emptyState: { icon: 'package', title: 'No finished goods yet', text: 'Approved batches appear here, ready to load.' },
           }))),
-        ERP.godown.multiple && (s.by_location || []).length > 1 ? el('section.card.pad0', {}, el('div.card-head', {}, el('h2', {}, icon('pin'), 'By godown')), el('div', { style: { padding: '0 var(--s4) var(--s4)' } }, ui.cardsTable({
+        ERP.godown.multiple && (s.by_location || []).length > 1 ? el('section.card.pad0', {}, el('div.card-head', {}, el('h2', {}, icon('pin'), 'By godown')), el('div.inset', {}, ui.cardsTable({
           columns: [{ label: 'Godown', cls: 'k', render: (g) => [el('b', { text: g.name }), el('small', { text: g.kind === 'PLANT' ? 'Plant' : 'Godown' })] }, { label: 'Raw items', cls: 'num', render: (g) => ui.fmtNum(g.raw_items, 0) },
-            { label: 'Finished goods', cls: 'num', render: (g) => `${ui.fmtNum(g.fg_ready_crates, 0)} crates` }, { label: 'In QC', cls: 'num', render: (g) => `${ui.fmtNum(g.quarantine_crates, 0)}` }], rows: s.by_location }))) : null,
-        (s.in_transit || []).length ? el('section.card.pad0', {}, el('div.card-head', {}, el('h2', {}, icon('transfer'), 'On the road between godowns'), el('a.btn.ghost.sm', { href: '/godowns.html' }, 'Transfers', icon('chevron-right', 'sm'))), el('div', { style: { padding: '0 var(--s4) var(--s3)' } },
-          el('ul.list', {}, s.in_transit.map((t) => { const h = (Date.now() - new Date(t.created_at).getTime()) / 3600000; return el('li', {}, el('div.grow', {}, el('b', { text: t.tf_no }), el('span.small.muted', { text: `${gname(t.from_location_id)} to ${gname(t.to_location_id)} - sent ${ui.fmtRelative(t.created_at)}` })), h > 48 ? ui.badge('OVERDUE', 'Over 48 h') : ui.badge('IN_TRANSIT')); })))) : null);
+            { label: 'Finished goods', cls: 'num', render: (g) => [`${ui.fmtNum(g.fg_ready_crates, 0)} crates`, ui.toNum(g.quarantine_crates) > 0 ? el('small.block.muted', { text: `+ ${ui.fmtNum(g.quarantine_crates, 0)} in QC` }) : null] }], rows: s.by_location }))) : null,
+        (s.in_transit || []).length ? el('section.card.pad0', {}, el('div.card-head', {}, el('h2', {}, icon('transfer'), 'On the road'), el('a.btn.ghost.sm.link', { href: '/godowns.html' }, 'All transfers', icon('chevron-right', 'sm'))), el('div.inset', {},
+          el('ul.list', {}, s.in_transit.map((t) => { const h = (Date.now() - new Date(t.created_at).getTime()) / 3600000; return el('li', {}, el('div.grow', {}, el('b.nowrap', { text: t.tf_no }), el('span.small.muted', { text: `${gname(t.from_location_id)} to ${gname(t.to_location_id)} - sent ${ui.fmtRelative(t.created_at)}` })), h > 48 ? ui.badge('OVERDUE', 'Over 48 h') : ui.badge('IN_TRANSIT')); })))) : null);
     });
   }
   refreshers.overview = load; load();
@@ -71,14 +71,14 @@ function mountStock(panel) {
   async function stock() {
     const rows = await api.get('/api/warehouse/stock', { ...L.readParam(), zone: st.zone, item_type: st.type, q: st.q, low: st.low ? 1 : '' });
     const multi = ERP.godown.current() === 'all';
-    return el('div.stack.tight', {}, scopeNote(), ui.cardsTable({
+    return el('div.stack.tight', {}, scopeNote(), rows.length ? el('p.small.muted.tap-hint', { text: 'Tap an item to see its lots.' }) : null, ui.cardsTable({
       columns: [
         { label: 'Item', cls: 'k', render: (r) => [el('b', { text: r.name }), el('small', { text: `${r.code}${multi ? ` - ${r.location_name}` : ''}` })] },
         { label: 'Zone', cls: 's', render: (r) => el('span.chip-s', { text: L.zoneLabel(r.zone) }) },
         { label: 'Quantity', cls: 'num', render: (r) => (r.item_type === 'PRODUCT' ? L.cratesCell(r.qty, r.crates_per_pallet, r.kind === 'RETURNABLE' ? 'jars' : 'crates') : L.qty(r.qty, r.unit)) },
         { label: 'Lots', cls: 'num', hideMobile: true, render: (r) => `${r.lots}` },
         { label: 'Godown', hideMobile: true, render: (r) => (multi ? r.location_name : '') },
-        { label: '', cls: 'a', render: (r) => L.btn('Lots and details', 'list', { kind: 'secondary', sm: true, onClick: () => openItem(r) }) },
+        { label: '', cls: 'a', hideMobile: true, render: (r) => L.btn('Lots and details', 'list', { kind: 'secondary', sm: true, onClick: () => openItem(r) }) },
       ], rows, onRow: openItem,
       emptyState: { icon: 'warehouse', title: st.q || st.zone || st.type || st.low ? 'Nothing matches' : 'No stock here yet', text: st.q || st.zone || st.type || st.low ? 'Clear the search or filters.' : 'Stock appears here once goods are received or produced.' },
     }));
