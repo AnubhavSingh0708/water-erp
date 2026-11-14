@@ -3,7 +3,7 @@
 // Partial load (fewer crates than the label): the server splits the label; we offer to print the new residual label.
 import { api } from '/js/api.js';
 import * as ui from '/js/ui.js';
-import { el, icon, cratesNode, crates, run, svgNode, loadScript } from '/js/pages/loading-common.js';
+import { el, icon, cratesNode, crates, run, svgNode, loadScript, actionFor } from '/js/pages/loading-common.js';
 
 /** Pull the label code out of a scanned URL (".../loading.html?qr=CODE") or a typed/pasted code. */
 export function extractCode(text) {
@@ -15,12 +15,14 @@ export function extractCode(text) {
 
 /** Print one label (SVG QR + text) on its own: a temporary print root, everything else is hidden by loading.css (body.printing-label). */
 export function printLabel(set, plant) {
+  document.body.classList.remove('printing-label'); document.querySelectorAll('.label-print-root').forEach((n) => n.remove());
   const svg = svgNode(set.svg);
   const root = el('div.label-print-root', {}, el('div.label', {}, svg || null, el('div.label-txt', {}, el('b.big', { text: set.set_label }), el('div', { text: set.product_name }), el('div', { text: `Batch ${set.batch_no}` }),
     el('div', { text: `${set.crates} crates - exp ${ui.fmtDate(set.expiry_date)}` }), el('div.mono', { text: set.code }), plant ? el('div.small', { text: plant }) : null)));
   document.body.append(root); document.body.classList.add('printing-label');
   const done = () => { root.remove(); document.body.classList.remove('printing-label'); window.removeEventListener('afterprint', done); };
   window.addEventListener('afterprint', done); window.print();
+  setTimeout(done, 1500);
 }
 
 function showResidual(set, ctx) {
@@ -38,7 +40,7 @@ function showResidual(set, ctx) {
  */
 export function openScanner({ trip, ctx, code, onAdded, refresh, onClose }) {
   let stream = null; let track = null; let running = false; let raf = 0; let detector = null; let canvas = null; let paused = false; let devices = []; let devIdx = 0; let torchOn = false;
-  const act = api.action();
+  const act = actionFor(`trip:${trip.id}`);
   const video = el('video.scan-video', { playsinline: true, muted: true, autoplay: true, 'aria-label': 'Camera view' });
   const frame = el('div.scan-frame', { hidden: true }, video, el('div.scan-aim', { 'aria-hidden': 'true' }));
   const camMsg = el('p.small.muted', { text: 'Point the camera at the QR sticker on the crates.' });

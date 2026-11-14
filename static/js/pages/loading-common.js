@@ -66,7 +66,7 @@ export function reviewDialog({ title = 'Review before saving', intro, before, af
   const yes = el('button.btn', { type: 'button', class: danger ? 'danger' : 'primary', on: { click: () => dlg.close(true) } }, confirmText);
   const no = el('button.btn.secondary', { type: 'button', on: { click: () => dlg.close(false) } }, cancelText);
   const dlg = ui.openDialog({ title, body, actions: [no, yes] });
-  yes.focus();
+  (danger ? no : yes).focus();
   return dlg.closed.then((r) => r === true);
 }
 
@@ -199,3 +199,11 @@ export const modalOpen = () => !!document.querySelector('dialog[open]');
 let vehicleCache = null;
 export async function getVehicles(force = false) { if (!vehicleCache || force) vehicleCache = await api.get('/api/ref/vehicles'); return vehicleCache; }
 export const clearVehicles = () => { vehicleCache = null; };
+
+/**
+ * actionFor(key) - one api.action() per logical user action, kept for the life of the page (not per dialog).
+ * Closing and re-opening a form after a timeout therefore re-sends the SAME Idempotency-Key (same body); the key is
+ * replaced by api.action() itself after a success or when the body changes.
+ */
+const actions = new Map();
+export function actionFor(key) { if (!actions.has(key)) actions.set(key, api.action()); return actions.get(key); }

@@ -2,7 +2,7 @@
 import { api } from '/js/api.js';
 import * as ui from '/js/ui.js';
 import { ERP } from '/js/shell.js';
-import { el, icon, run, dryRunReview } from '/js/pages/loading-common.js';
+import { el, icon, run, dryRunReview, actionFor } from '/js/pages/loading-common.js';
 
 export const REASONS = {
   WASH_REJECT: 'Failed wash inspection', CRACKED: 'Cracked', LEAKING: 'Leaking', DAMAGED_RETURN: 'Damaged on return', AGE_RETIRED: 'Retired - too old', LOST: 'Lost', OTHER: 'Other',
@@ -24,7 +24,7 @@ export function writeLocation(state) { const c = ERP.godown.current(); return c 
  *               review:{...}, confirmText, danger, submitLabel, done(res)})
  */
 function actionDialog(o) {
-  const act = api.action();
+  const act = actionFor(`jars:${o.id}`);
   const form = el('form.stack', { id: `ja-${o.id}`, novalidate: true }, el('div.form-error', { role: 'alert' }), o.intro ? el('p.small.muted', { text: o.intro }) : null, ...o.fields.map((f) => f.el || f), o.extra || null);
   const draft = ERP.drafts.bind(form, { page: 'jars', id: `act-${o.id}` });
   const submit = el('button.btn', { type: 'submit', form: `ja-${o.id}`, class: o.danger ? 'danger' : 'primary' }, el('span.btn-icon', {}, icon(o.icon || 'check')), o.submitLabel || 'Review');

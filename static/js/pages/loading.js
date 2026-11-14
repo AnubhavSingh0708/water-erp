@@ -4,7 +4,7 @@
 import { boot, ERP } from '/js/shell.js';
 import { api } from '/js/api.js';
 import * as ui from '/js/ui.js';
-import { run, explain, capacityBar, daysBetween, getVehicles, clearVehicles } from '/js/pages/loading-common.js';
+import { run, explain, capacityBar, daysBetween, getVehicles, clearVehicles, actionFor } from '/js/pages/loading-common.js';
 import { mountTrip } from '/js/pages/loading-trips.js';
 import { mountSettle } from '/js/pages/loading-settle.js';
 import { mountGatePass } from '/js/pages/loading-gate.js';
@@ -150,7 +150,7 @@ async function openNewTrip(ctx) {
     g.currentName() ? el('div.row', {}, icon('pin', 'sm'), el('span.small', {}, 'Loading from ', el('b', { text: g.currentName() }))) : null, vf.el, info, rf.el, df.el, nf.el);
   const draft = ERP.drafts.bind(form, { page: 'loading', id: 'new-trip' });
   paintInfo();
-  const act = api.action();
+  const act = actionFor('new-trip');
   const submit = el('button.btn.primary', { type: 'submit', form: 'new-trip' }, el('span.btn-icon', {}, icon('truck')), 'Start trip');
   const cancel = el('button.btn.secondary', { type: 'button', on: { click: () => dlg.close() } }, 'Cancel');
   const dlg = ui.openDialog({ title: 'New loading trip', body: form, actions: [cancel, submit] });

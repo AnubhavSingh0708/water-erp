@@ -5,13 +5,18 @@ import { el, icon, cratesNode, kv } from '/js/pages/loading-common.js';
 
 /** Print the document element. thermal=true => 80 mm roll (named @page in loading.css). */
 export function printDoc(docEl, { thermal = false, title } = {}) {
+  document.body.classList.remove('printing-label'); document.querySelectorAll('.label-print-root').forEach((n) => n.remove());
   const oldTitle = document.title;
+  document.querySelectorAll('style.print-page').forEach((n) => n.remove());
+  const pageStyle = thermal ? Object.assign(document.createElement('style'), { className: 'print-page', textContent: '@page { size: 80mm auto; margin: 3mm; }' }) : null;
+  if (pageStyle) document.head.append(pageStyle);
   docEl.classList.toggle('print-thermal', thermal);
   document.body.classList.toggle('print-thermal-mode', thermal);
   if (title) document.title = title;
-  const done = () => { docEl.classList.remove('print-thermal'); document.body.classList.remove('print-thermal-mode'); document.title = oldTitle; window.removeEventListener('afterprint', done); };
+  const done = () => { if (pageStyle) pageStyle.remove(); docEl.classList.remove('print-thermal'); document.body.classList.remove('print-thermal-mode'); document.title = oldTitle; window.removeEventListener('afterprint', done); };
   window.addEventListener('afterprint', done);
   window.print();
+  setTimeout(done, 1500);   // some browsers never fire afterprint
 }
 
 /** Signature boxes, printed at the bottom of a document. */

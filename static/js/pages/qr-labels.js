@@ -3,7 +3,7 @@
 import { boot, ERP } from '/js/shell.js';
 import { api } from '/js/api.js';
 import * as ui from '/js/ui.js';
-import { el, icon, cratesNode, crates, run, explain, svgNode } from '/js/pages/loading-common.js';
+import { el, icon, cratesNode, crates, run, explain, svgNode, actionFor } from '/js/pages/loading-common.js';
 
 await boot({ page: 'qr-labels', title: 'QR labels', guard: false });
 const main = document.getElementById('main');
@@ -87,7 +87,7 @@ function paintPanel() {
 
 /* generate */
 function generateCard(rem) {
-  const b = S.batch; const cpp = b.cpp || 0; const act = api.action();
+  const b = S.batch; const cpp = b.cpp || 0; const act = actionFor(`qr-gen:${b.id}`);
   const mode = ui.segmented({ label: 'How to split', value: 'UNIFORM', options: [{ value: 'UNIFORM', label: 'Same size' }, { value: 'COUNT', label: 'Number of sets' }, { value: 'CUSTOM', label: 'Custom sizes' }], onChange: (v) => { modeIn.value = v; paintMode(); } });
   const modeIn = el('input', { type: 'hidden', name: 'mode', value: 'UNIFORM' });
   const size = ui.field({ label: 'Crates per set', name: 'set_size', type: 'int', value: cpp ? String(cpp) : '', help: cpp ? `One pallet = ${cpp} crates. The last set may be smaller.` : 'The last set may be smaller.' });
@@ -145,7 +145,7 @@ function setsCard() {
 async function del(s) {
   const ok = await ui.confirmDialog({ title: `Delete label ${s.set_label}?`, message: `${crates(s.crates)} become unlabelled again. Only labels that were never used on a trip can be deleted.`, confirmText: 'Delete label', danger: true });
   if (!ok) return;
-  const act = api.action();
+  const act = actionFor(`qr-del:${s.id}`);
   const r = await run(null, async () => { await act.del(`/api/qr/sets/${encodeURIComponent(s.id)}`); return true; }, { refresh: () => select(S.batch) });
   if (r) { ui.toast.ok(`Label ${s.set_label} deleted`); await loadSets(); paintPanel(); }
 }
@@ -166,7 +166,7 @@ async function printView(onlyIds) {
   };
   const count = el('span.small.muted');
   const toggle = onlyIds ? null : el('label.check.bare', {}, el('input', { type: 'checkbox', checked: true, on: { change: (e) => { unusedOnly = e.target.checked; paint(); } } }), 'Only labels not yet used on a trip');
-  const doPrint = (thermal) => { document.body.classList.toggle('print-thermal-mode', thermal); grid.classList.toggle('thermal', thermal); const done = () => { document.body.classList.remove('print-thermal-mode'); grid.classList.remove('thermal'); window.removeEventListener('afterprint', done); }; window.addEventListener('afterprint', done); window.print(); };
+  const doPrint = (thermal) => { document.querySelectorAll('style.print-page').forEach((n) => n.remove()); const ps = thermal ? Object.assign(document.createElement('style'), { className: 'print-page', textContent: '@page { size: 80mm auto; margin: 2mm; }' }) : null; if (ps) document.head.append(ps); document.body.classList.toggle('print-thermal-mode', thermal); grid.classList.toggle('thermal', thermal); const done = () => { if (ps) ps.remove(); document.body.classList.remove('print-thermal-mode'); grid.classList.remove('thermal'); window.removeEventListener('afterprint', done); }; window.addEventListener('afterprint', done); window.print(); setTimeout(done, 1500); };
   ui.mount(printHost, el('div.stack', {},
     el('div.no-print.stack', {}, el('button.btn.ghost.sm.back', { type: 'button', on: { click: back } }, icon('chevron-left', 'sm'), 'Back to labels'),
       el('div.page-head', {}, el('div', {}, el('b.big', { text: `Labels - ${sh.batch.batch_no}` }), el('div.small.muted', { text: sh.product.name })), count),
