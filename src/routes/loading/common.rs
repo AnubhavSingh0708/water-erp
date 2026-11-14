@@ -342,8 +342,42 @@ pub async fn trip_json(conn: &mut PgConnection, id: Uuid, with_items: bool) -> A
     let t = sqlx::query_as::<_, TripRow>(&format!("{TRIP_SELECT} WHERE t.id = $1")).bind(id).fetch_optional(&mut *conn).await?
         .ok_or_else(|| AppError::not_found("Trip"))?;
     let mut v = trip_value(&t);
-    if with_items { v["items"] = serde_json::to_value(trip_items(&mut *conn, id).await?).unwrap_or(Value::Null); }
+    if with_items {
+        v["items"] = serde_json::to_value(trip_items(&mut *conn, id).await?).unwrap_or(Value::Null);
+        if t.status == "SETTLED" {
+            let (deliveries, unassigned) = deliveries_block(&mut *conn, id).await?;
+            v["customer_deliveries"] = deliveries;
+            v["unassigned_crates"] = unassigned;
+        }
+    }
     Ok(v)
+}
+
+#[derive(FromRow, Serialize)]
+struct DeliveryRow {
+    id: Uuid, customer_id: Uuid, customer_name: String, customer_code: String, product_id: Uuid, product_name: String,
+    crates: i32, pallets: Option<i32>, loose_crates: Option<i32>,
+}
+#[derive(FromRow, Serialize)]
+struct UnassignedRow { product_id: Uuid, product_name: String, delivered: i64, assigned: i64, unassigned: i64 }
+
+/// Per-customer deliveries of a settled trip and, per non-returnable product, how many delivered crates no customer was assigned.
+pub async fn deliveries_block(conn: &mut PgConnection, trip_id: Uuid) -> AppResult<(Value, Value)> {
+    let rows = sqlx::query_as::<_, DeliveryRow>(
+        "SELECT d.id, d.customer_id, c.name AS customer_name, c.code AS customer_code, d.product_id, p.name AS product_name, d.crates,
+                CASE WHEN p.crates_per_pallet IS NULL THEN NULL ELSE d.crates / p.crates_per_pallet END AS pallets,
+                CASE WHEN p.crates_per_pallet IS NULL THEN NULL ELSE d.crates % p.crates_per_pallet END AS loose_crates
+         FROM trip_customer_deliveries d JOIN customers c ON c.id = d.customer_id JOIN products p ON p.id = d.product_id
+         WHERE d.trip_id = $1 ORDER BY c.name, p.name, d.id")
+        .bind(trip_id).fetch_all(&mut *conn).await?;
+    let un = sqlx::query_as::<_, UnassignedRow>(
+        "SELECT p.id AS product_id, p.name AS product_name, s.delivered, s.assigned, s.delivered - s.assigned AS unassigned
+         FROM (SELECT ti.product_id, SUM(COALESCE(ti.crates_delivered, 0))::bigint AS delivered,
+                      COALESCE((SELECT SUM(d.crates) FROM trip_customer_deliveries d WHERE d.trip_id = ti.trip_id AND d.product_id = ti.product_id), 0)::bigint AS assigned
+               FROM trip_items ti WHERE ti.trip_id = $1 GROUP BY ti.trip_id, ti.product_id) s
+         JOIN products p ON p.id = s.product_id WHERE p.kind <> 'RETURNABLE' ORDER BY p.name, p.id")
+        .bind(trip_id).fetch_all(&mut *conn).await?;
+    Ok((serde_json::to_value(rows).unwrap_or(Value::Null), serde_json::to_value(un).unwrap_or(Value::Null)))
 }
 
 /// Warning text when a vehicle is (nearly) full.
