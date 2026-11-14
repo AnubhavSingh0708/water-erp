@@ -399,7 +399,7 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .tabs [role="tab"][aria-selected="true"] { color: var(--brand-700); }
 .tabs [role="tab"][aria-selected="true"]::after { content: ""; position: absolute; left: 8px; right: 8px; bottom: -1px; height: 3px; border-radius: 3px 3px 0 0; background: var(--brand-600); }
 @media (max-width: 479.98px) { .tabs [role="tab"] { padding: 0 12px; font-size: .95rem; } }
-@media (max-width: 440px) { .tabs [role="tab"] .i { display: none; } .tabs [role="tab"] { padding: 0 10px; } }
+@media (max-width: 440px) { .tabs [role="tab"] .i { display: none; } .tabs [role="tab"] { padding: 0 10px; min-width: 44px; justify-content: center; } }
 @media (min-width: 768px) { .tabs { margin-left: 0; margin-right: 0; padding-left: 0; padding-right: 0; } }
 .chips { display: flex; flex-wrap: wrap; gap: var(--s2); }
 .chip-btn { min-height: 44px; padding: 0 var(--s4); border-radius: var(--r-pill); border: 1.5px solid var(--line-strong); background: var(--surface); font-weight: 700; cursor: pointer; color: var(--ink-2); }
@@ -439,10 +439,9 @@ a.badge { text-decoration: none; min-height: 44px; padding: 0 14px 0 10px; font-
 .tbl td.num, .tbl th.num { text-align: right; }
 .tbl td.k { font-weight: 700; min-width: 8rem; }
 .tbl td.k small { display: block; font-weight: 500; color: var(--ink-3); }
-.tbl td.a { text-align: right; }
+.tbl td.a { text-align: right; white-space: nowrap; }
 .tbl td.num { white-space: nowrap; }
-.tbl td.a .btn-row { justify-content: flex-end; flex-wrap: wrap; }
-@media (min-width: 768px) { .tbl td.a .btn-row:has(.compact) { flex-wrap: nowrap; } }
+.tbl td.a .btn-row { justify-content: flex-end; flex-wrap: nowrap; }
 @media (min-width: 768px) { .tbl .btn.compact { min-width: 44px; padding: 0 10px; } .tbl .btn.compact .btn-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; } }
 .tbl tr.inactive td:not(.a) { color: var(--ink-3); }
 @media (max-width: 767.98px) {
