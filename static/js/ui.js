@@ -228,8 +228,9 @@ export function unitLabel(unit, n) {
   if (!unit) return '';
   const one = Math.abs(toNum(n)) === 1;
   if (typeof unit === 'object') return (one ? unit.one : (unit.other || unit.many)) || unit.one || '';
-  return one && /[a-z]s$/i.test(unit) && !/ss$/i.test(unit) ? unit.slice(0, -1) : unit;
+  return one ? (SINGULAR[String(unit).toLowerCase()] || unit) : unit;   // only well-known plurals are singularised ('nos', 'pcs', 'kg' stay as given)
 }
+const SINGULAR = { crates: 'crate', containers: 'container', pallets: 'pallet', jars: 'jar', bottles: 'bottle', bags: 'bag', rolls: 'roll', sets: 'set', labels: 'label', sheets: 'sheet', boxes: 'box', cartons: 'carton', drums: 'drum', cans: 'can', cases: 'case', sacks: 'sack', litres: 'litre', liters: 'liter' };
 
 /**
  * reviewSheet({title, effects:[{item,zone,delta,after,unit,note,right}], warnings:[], confirmText, cancelText, summary, intro,

@@ -1,12 +1,12 @@
 // Service worker: precache the static shell, never touch /api/*, network-first HTML with offline fallback,
 // stale-while-revalidate for css/js/img. Bump VERSION when the precache list or caching rules change.
-const VERSION = 'v1';
+const VERSION = 'v2';
 const SHELL = `erp-shell-${VERSION}`;
 const RUNTIME = `erp-rt-${VERSION}`;
 const PRECACHE = [
   '/offline.html', '/login.html', '/index.html', '/manifest.json',
   '/css/styles.css', '/img/icons.svg', '/img/icon-192.png',
-  '/js/api.js', '/js/ui.js', '/js/drafts.js', '/js/connectivity.js', '/js/events.js', '/js/nav.js', '/js/shell.js', '/js/pwa.js',
+  '/js/api.js', '/js/ui.js', '/js/crud.js', '/js/drafts.js', '/js/connectivity.js', '/js/events.js', '/js/nav.js', '/js/shell.js', '/js/pwa.js',
 ];
 
 self.addEventListener('install', (e) => {
