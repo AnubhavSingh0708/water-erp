@@ -1,1 +1,10 @@
 /* production page styles (shared styles: warehouse.css) */
+/* blow molding: preform stock pre-check */
+.avail { display: flex; align-items: flex-start; gap: var(--s2); padding: var(--s2) var(--s3); border-radius: var(--r-sm); border: 1px solid var(--ok-line); background: var(--ok-bg); color: var(--ok); font-size: var(--fs-sm); line-height: 1.4; }
+.avail[hidden] { display: none; }
+.avail .i { flex: none; margin-top: 2px; }
+.avail b { font-size: 1rem; }
+.avail.warn { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn); }
+.avail.bad { background: var(--bad-bg); border-color: var(--bad-line); color: var(--bad); }
+.avail.muted { background: var(--neutral-bg); border-color: var(--neutral-line); color: var(--ink-3); }
+.avail-msg { margin-top: 2px; font-weight: 600; color: inherit; }
