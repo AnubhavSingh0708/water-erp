@@ -24,7 +24,7 @@ function ageBadge(mins) {
 const testBadge = (r) => (r === 'PASS' ? ui.badge('PASS', 'Test passed') : r === 'FAIL' ? ui.badge('FAIL', 'Test failed') : el('span.chip-s', { text: 'No test yet' }));
 
 function showList(initial = 'queue') {
-  mode = 'list'; openId = null; L.toTop();
+  mode = 'list'; openId = null; L.clearSub(); L.toTop();
   try { history.replaceState(null, '', location.pathname); } catch { /* ignore */ }
   ui.clear(view);
   const tabs = L.tabbed(view, [
@@ -81,7 +81,8 @@ function mountHistory(panel, status) {
 /* ---------------------------------------------------------------------------------------------- detail */
 async function showDetail(id) {
   mode = 'detail'; openId = id; L.toTop();
-  try { history.replaceState(null, '', `?batch=${encodeURIComponent(id)}`); } catch { /* ignore */ }
+  L.enterSub(() => showList());
+  try { history.replaceState(history.state, '', `?batch=${encodeURIComponent(id)}`); } catch { /* ignore */ }
   ui.mount(view, ui.skeletonCards(3));
   let d;
   try { d = await api.get(`/api/qc/batches/${id}`); } catch (e) { ui.mount(view, L.backBar('QC queue', () => showList()), ui.errorState(e, () => showDetail(id))); return; }

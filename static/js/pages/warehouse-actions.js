@@ -14,12 +14,12 @@ export function mountActions(panel, ctx) {
   const host = el('div.stack'); panel.append(host);
   let view = 'home'; let listsHost = null;
 
-  const formView = (title, form, submit, sub) => { view = 'form'; L.toTop(); ui.mount(host, L.backBar('Actions', home), el('h2', { text: title }), sub ? el('p.section-sub', { text: sub }) : null, form, L.actionBar(submit)); };
+  const formView = (title, form, submit, sub) => { view = 'form'; L.enterSub(home); L.toTop(); ui.mount(host, L.backBar('Actions', home), el('h2', { text: title }), sub ? el('p.section-sub', { text: sub }) : null, form, L.actionBar(submit)); };
   const godownLine = () => el('div.chip-row', {}, el('span.chip-s.info', {}, icon('pin', 'sm'), `Godown: ${ERP.godown.currentName() || 'default'}`));
 
   /* ------------------------------------------------------------------------------------------ home */
   function home() {
-    view = 'home';
+    view = 'home'; L.clearSub();
     const all = ERP.godown.current() === 'all';
     const tile = (label, sub, ic, fn) => el('button.action-tile', { type: 'button', disabled: all, on: { click: fn } }, el('span.ico', {}, icon(ic)), el('span.t', {}, el('b', { text: label }), el('small', { text: sub })), icon('chevron-right', 'sm'));
     listsHost = el('div.stack');
@@ -195,7 +195,7 @@ export function mountActions(panel, ctx) {
     L.signatureBlock(['Counted by', 'Checked by', 'Approved by']));
 
   async function openCount(id, pre) {
-    view = 'count'; L.toTop(); ui.mount(host, ui.skeletonCards(2));
+    view = 'count'; L.enterSub(home); L.toTop(); ui.mount(host, ui.skeletonCards(2));
     let c; try { c = pre || await api.get(`/api/warehouse/counts/${id}`); } catch (e) { ui.mount(host, L.backBar('Actions', home), ui.errorState(e, () => openCount(id))); return; }
     const pct = Number(L.settings().large_adjust_pct ?? 20);
     const printBtn = L.btn('Print sheet', 'print', { kind: 'secondary', sm: true, onClick: () => L.showDocument({ title: 'Stock count sheet', docNo: c.cnt_no, subtitle: `${L.zoneLabel(c.zone)} - ${c.location_name}`, build: () => countDoc(c) }) });

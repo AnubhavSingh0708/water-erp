@@ -15,7 +15,7 @@ export function mountBatches(panel, ctx) {
 
   /* ------------------------------------------------------------------------------------------ list */
   function showList() {
-    inForm = false; formRefresh = null; L.toTop();
+    inForm = false; formRefresh = null; L.clearSub(); L.toTop();
     const seg = ui.segmented({ options: QC_FILTERS, value: st.qc, label: 'QC status', onChange: (v) => { st.qc = v; st.offset = 0; load(); } });
     const search = el('input.input', { type: 'search', placeholder: 'Search batch no or product', 'aria-label': 'Search batches', maxlength: 100, value: st.q });
     search.addEventListener('input', ui.debounce(() => { st.q = search.value.trim(); st.offset = 0; load(); }, 350));
@@ -118,7 +118,7 @@ export function mountBatches(panel, ctx) {
 
   /* ------------------------------------------------------------------------------------------ new batch */
   async function showForm() {
-    inForm = true; L.toTop(); ui.mount(host, ui.skeletonCards(2));
+    inForm = true; L.enterSub(() => showList()); L.toTop(); ui.mount(host, ui.skeletonCards(2));
     let products, wstat;
     try { [products, wstat] = await Promise.all([L.refProducts(), api.get('/api/production/water-logs/status').catch(() => null)]); } catch (e) { ui.mount(host, ui.errorState(e, showForm)); return; }
     products = products.filter((p) => p.is_active);

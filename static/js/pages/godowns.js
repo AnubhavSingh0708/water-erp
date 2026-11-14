@@ -17,7 +17,7 @@ const ZONES = ['RM_STORE', 'BLOW_FLOOR', 'FG_READY', 'JAR_EMPTY', 'JAR_CLEAN'];
 
 /* ---------------------------------------------------------------------------------------------- list */
 function showList(initial = 'IN_TRANSIT') {
-  mode = 'list'; openId = null; detailRefresh = null; L.toTop();
+  mode = 'list'; openId = null; detailRefresh = null; L.clearSub(); L.toTop();
   ui.clear(view);
   view.append(el('div.page-head', {}, el('div', {}, el('p.sub', { text: 'Move goods between godowns. They stay "in transit" until the other godown confirms what arrived.' })),
     el('div.actions', {}, L.btn('New transfer', 'plus', { onClick: () => newTransfer() }))));
@@ -62,7 +62,7 @@ const showNote = (t) => L.showDocument({ title: 'Godown transfer note', docNo: t
 
 /* ---------------------------------------------------------------------------------------------- detail */
 async function openTransfer(id, pre) {
-  mode = 'detail'; openId = id; L.toTop(); ui.mount(view, ui.skeletonCards(2));
+  mode = 'detail'; openId = id; L.enterSub(() => showList()); L.toTop(); ui.mount(view, ui.skeletonCards(2));
   let t;
   try { t = pre || await api.get(`/api/godowns/transfers/${id}`); } catch (e) { ui.mount(view, L.backBar('Transfers', () => showList()), ui.errorState(e, () => openTransfer(id))); return; }
   const printBtn = L.btn('Print note', 'print', { kind: 'secondary', sm: true, onClick: () => showNote(t) });
@@ -95,7 +95,7 @@ async function cancelTransfer(t, button) {
 
 /* ---------------------------------------------------------------------------------------------- receive */
 function receiveView(t) {
-  mode = 'receive'; L.toTop();
+  mode = 'receive'; L.enterSub(() => openTransfer(t.id, t)); L.toTop();
   const form = el('form.stack', { id: 'recv-form', novalidate: true, autocomplete: 'off' }, el('div.form-error', { role: 'alert' }));
   const rows = t.lines.map((l) => {
     const whole = l.item_type === 'PRODUCT';
@@ -144,7 +144,7 @@ function receiveView(t) {
 
 /* ---------------------------------------------------------------------------------------------- create */
 async function newTransfer() {
-  mode = 'create'; L.toTop(); ui.mount(view, ui.skeletonCards(2));
+  mode = 'create'; L.enterSub(() => showList()); L.toTop(); ui.mount(view, ui.skeletonCards(2));
   let vehicles = []; try { vehicles = await L.refVehicles(); } catch { /* optional */ }
   const dests = await L.loadAllLocations();                       // every active godown: where goods may be SENT
   const gl = ERP.godown.list;                                     // godowns this user may send FROM
