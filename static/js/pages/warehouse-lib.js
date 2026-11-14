@@ -216,8 +216,9 @@ export function staleBanner(text = 'Someone else changed this while you were loo
 }
 
 /* ------------------------------------------------------------------------------------------------ dry run -> review -> confirmed submit */
+const TRANSIT_ID = '00000000-0000-0000-0000-000000000002';
 const zoneWithPlace = (e) => {
-  const place = (e.location_id && godown.list.length > 1) ? (godown.list.find((g) => g.id === e.location_id) || {}).name : '';
+  const place = e.location_id === TRANSIT_ID ? 'On the road' : (e.location_id && ((allLocs || []).length > 1 || godown.list.length > 1)) ? anyGodownName(e.location_id, '') : '';
   const z = e.zone === 'TRANSIT' ? 'In transit' : zoneLabel(e.zone);
   return [place, z].filter(Boolean).join(' / ');
 };

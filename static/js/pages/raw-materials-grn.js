@@ -50,7 +50,7 @@ function mountReceive(panel, ctx) {
   let inForm = false; let listHost = null;
 
   function showList() {
-    inForm = false;
+    inForm = false; L.clearSub();
     const search = el('input.input', { type: 'search', placeholder: 'Search GRN, challan or supplier', 'aria-label': 'Search GRNs', maxlength: 100, value: state.q });
     const seg = ui.segmented({ options: [{ value: 'ACTIVE', label: 'Received' }, { value: 'VOID', label: 'Voided' }, { value: '', label: 'All' }], value: state.status, label: 'GRN status', onChange: (v) => { state.status = v; state.offset = 0; load(); } });
     search.addEventListener('input', ui.debounce(() => { state.q = search.value.trim(); state.offset = 0; load(); }, 350));
@@ -83,7 +83,7 @@ function mountReceive(panel, ctx) {
 
   /* -------------------------------------------------------------------------------------------- form */
   async function showForm(prefill = {}) {
-    inForm = true; L.toTop();
+    inForm = true; L.enterSub(() => { inForm = false; showList(); }); L.toTop();
     ui.mount(host, ui.skeletonCards(2));
     let materials, suppliers;
     try { [materials, suppliers] = await Promise.all([L.refMaterials(), L.refSuppliers()]); } catch (e) { ui.mount(host, ui.errorState(e, () => showForm(prefill))); return; }
@@ -247,7 +247,7 @@ function mountReturns(panel, ctx) {
   const host = el('div.stack'); panel.append(host);
   let inForm = false; let listHost = null; let offset = 0;
   function showList() {
-    inForm = false; listHost = el('div');
+    inForm = false; L.clearSub(); listHost = el('div');
     ui.mount(host, el('div.page-head', {}, el('div', {}, el('p.sub', { text: 'Send damaged or wrong goods back to the supplier. Stock is removed from the raw store.' })), el('div.actions', {}, L.btn('New return', 'plus', { onClick: () => showForm() }))), listHost);
     load();
   }
@@ -268,7 +268,7 @@ function mountReturns(panel, ctx) {
   async function openRtv(id) { try { showRtv(await api.get(`/api/raw-materials/supplier-returns/${id}`)); } catch (e) { ui.toastError(e); } }
 
   async function showForm() {
-    inForm = true; L.toTop(); ui.mount(host, ui.skeletonCards(2));
+    inForm = true; L.enterSub(() => showList()); L.toTop(); ui.mount(host, ui.skeletonCards(2));
     let suppliers; try { suppliers = await L.refSuppliers(); } catch (e) { ui.mount(host, ui.errorState(e, () => showForm())); return; }
     const gd = L.godownField({ label: 'Godown', name: 'location_id' });
     const supF = ui.field({ label: 'Supplier', name: 'supplier_id', type: 'select', required: true, options: [{ value: '', label: 'Choose supplier...' }, ...suppliers.map((s) => ({ value: s.id, label: s.name }))] });
