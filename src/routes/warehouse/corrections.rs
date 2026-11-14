@@ -150,6 +150,8 @@ pub async fn adjust(State(s): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>, J
     whole_if_product(&ctx, "delta", delta)?;
     let expiry = check_lot(&mut tx, &ctx, zone, lot, delta > Decimal::ZERO).await?;
     let reserved = lock_reserved(&mut tx, loc, &ctx, zone, lot).await?;
+    // finished goods cannot be conjured: never above what the batch produced (hard error, not overridable by `confirm`; batch row locked first)
+    if delta > Decimal::ZERO && ctx.kind == ItemKind::Product && zone == "FG_READY" { stock::guard_over_produced(&mut tx, lot, delta, Decimal::ZERO).await?; }
     let cur = balance_locked(&mut tx, loc, &ctx, zone, lot).await?;
     if cur + delta < Decimal::ZERO { return Err(insufficient(&ctx, zone, lot, cur, -delta)); }
     if delta < Decimal::ZERO && reserved > Decimal::ZERO && cur + delta < reserved { return Err(bh::reserved_error(&mut tx, loc, lot, reserved).await); }
@@ -460,6 +462,7 @@ pub async fn count_post(State(s): State<AppState>, user: AuthUser, Id(id): Id, Q
     let mut warnings = vec![];
     let mut uncounted = 0;
     let mut changed = 0;
+    let mut surplus: std::collections::HashMap<Uuid, Decimal> = std::collections::HashMap::new();
     for l in &lines {
         let Some(counted) = l.get::<Option<Decimal>, _>("counted_qty") else { uncounted += 1; continue; };
         let kind = if l.get::<String, _>("item_type") == "RAW" { ItemKind::Raw } else { ItemKind::Product };
@@ -480,6 +483,9 @@ pub async fn count_post(State(s): State<AppState>, user: AuthUser, Id(id): Id, Q
         if kind == ItemKind::Product && zone == "FG_READY" && delta > Decimal::ZERO {
             let st: Option<String> = sqlx::query_scalar("SELECT qc_status FROM production_batches WHERE id=$1 AND product_id=$2").bind(lot).bind(item).fetch_optional(&mut *tx).await?;
             if st.as_deref() != Some("APPROVED") { return Err(AppError::conflict("QC_LOCKED", format!("{name}: only QC-approved batches can be added to finished goods"))); }
+            let staged = surplus.entry(lot).or_insert(Decimal::ZERO);
+            stock::guard_over_produced(&mut tx, lot, delta, *staged).await?;
+            *staged += delta;
         }
         if reserved > Decimal::ZERO && counted < reserved { return Err(bh::reserved_error(&mut tx, loc, lot, reserved).await); }
         if warnings.len() < 12 { warnings.push(format!("{name}: {} -> {} ({}{})", cur.normalize(), counted.normalize(), if delta > Decimal::ZERO { "+" } else { "" }, delta.normalize())); }

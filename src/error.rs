@@ -120,6 +120,7 @@ pub fn hint_for(code: &str) -> Option<&'static str> {
         "LOCKED" => "Too many attempts. Wait a few minutes and try again.",
         "UNAVAILABLE" => "Wait a moment and retry. Your entry was not saved. If it keeps happening, tell the administrator.",
         "RESERVED_STOCK" => "Some of these crates are held by an open loading trip. Remove them from that trip first, then try again.",
+        "OVER_PRODUCED" => "Finished goods can only come from production. Check the batch number and the quantity; if crates are really missing from the books, fix the production batch record instead of adjusting stock.",
         "PROTECTED" => "This record is built in and cannot be changed this way.",
         "FEATURE_DISABLED" => "This feature is switched off or not configured. Ask an administrator.",
         "INTERNAL" => "Something went wrong on the server. Your entry was not saved. Quote the reference shown to the administrator.",

@@ -35,6 +35,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/batches/{batch_id}/sets", get(batch_sets).post(generate))
         .route("/batches/{batch_id}/sheet", get(sheet))
+        .route("/batches", get(eligible_batches))
         .route("/sets", get(search))
         .route("/sets/lookup/{code}", get(lookup))
         .route("/sets/{id}", delete(delete_set))
@@ -304,6 +305,34 @@ pub async fn sheet(State(st): State<AppState>, user: AuthUser, headers: HeaderMa
         "product": { "id": product_id, "name": pname, "units_per_crate": upc, "crates_per_pallet": cpp },
         "sets": sets,
     })))
+}
+
+#[derive(Deserialize, Default)]
+pub struct BatchesQ { q: Option<String>, limit: Option<i64>, offset: Option<i64> }
+
+/// `GET /api/qr/batches?q=&limit=&offset=` - batches that can still carry QR labels (QUARANTINE / APPROVED, never REJECTED), for label
+/// users who do not have the `production` page. Scoped to the caller's godowns (the batch's godown); newest first.
+pub async fn eligible_batches(State(st): State<AppState>, user: AuthUser, Q(q): Q<BatchesQ>) -> AppResult<Json<Value>> {
+    let scope: Option<Vec<Uuid>> = location_scope(&user);
+    let pat = match q.q.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => { validate::text("q", s, 100)?; Some(validate::like_pattern(s)) }
+        None => None,
+    };
+    let page = validate::PageQuery { limit: q.limit, offset: q.offset };
+    let filter = "WHERE b.qc_status IN ('QUARANTINE','APPROVED') AND ($1::text IS NULL OR b.batch_no ILIKE $1 OR p.name ILIKE $1 OR p.code ILIKE $1)
+                  AND ($2::uuid[] IS NULL OR b.location_id = ANY($2))";
+    let rows = sqlx::query(&format!(
+        "SELECT jsonb_build_object('id', b.id, 'batch_no', b.batch_no, 'product_id', b.product_id, 'product_name', p.name, 'crates', b.crates, 'qc_status', b.qc_status,
+            'expiry_date', b.expiry_date, 'location_id', b.location_id, 'location_name', l.name, 'allocated_crates', a.allocated,
+            'free_crates', GREATEST(b.crates - a.allocated, 0)) AS j
+         FROM production_batches b JOIN products p ON p.id = b.product_id JOIN locations l ON l.id = b.location_id
+         CROSS JOIN LATERAL (SELECT COALESCE(SUM(s.original_crates) FILTER (WHERE s.parent_set_id IS NULL), 0)::bigint AS allocated FROM qr_crate_sets s WHERE s.batch_id = b.id) a
+         {filter} ORDER BY b.created_at DESC, b.id ASC LIMIT $3 OFFSET $4"))
+        .bind(&pat).bind(&scope).bind(page.limit()).bind(page.offset()).fetch_all(&st.db).await?;
+    let total: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM production_batches b JOIN products p ON p.id = b.product_id {filter}"))
+        .bind(&pat).bind(&scope).fetch_one(&st.db).await?;
+    let items: Vec<Value> = rows.iter().map(|r| sqlx::Row::get::<Value, _>(r, "j")).collect();
+    Ok(Json(json!({ "items": items, "total": total })))
 }
 
 #[derive(Deserialize, Default)]

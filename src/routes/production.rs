@@ -28,6 +28,7 @@ pub fn router() -> Router<AppState> {
         .route("/blow-runs/{id}", get(blow_get))
         .route("/water-logs", get(water_list).post(water_create))
         .route("/water-logs/status", get(water_status))
+        .route("/preform-stock", get(preform_stock))
         .route("/bom-check", get(batches::bom_check))
         .route("/batches", get(batches::list).post(batches::create))
         .route("/batches/{id}", get(batches::get))
@@ -222,6 +223,24 @@ async fn water_list(State(s): State<AppState>, Q(q): Q<RangeQ>) -> AppResult<Jso
          WHERE ($1::date IS NULL OR ", local_date!("w.logged_at", "$3"), " >= $1) AND ($2::date IS NULL OR ", local_date!("w.logged_at", "$3"), " <= $2)"),
         "la DESC, wid", &[Arg::D(q.from), Arg::D(q.to), Arg::I(off)], pq.limit(), pq.offset()).await?;
     Ok(Json(v))
+}
+
+#[derive(Deserialize, Default)]
+struct PreformQ { preform_material_id: Option<Uuid>, location_id: Option<Uuid> }
+
+/// `GET /api/production/preform-stock?preform_material_id=&location_id=` - the RM_STORE quantity of one PREFORM material at the (resolved,
+/// permitted, production-site) godown, so blow-run operators without the raw-materials page can see whether enough preforms exist.
+async fn preform_stock(State(s): State<AppState>, user: AuthUser, Q(q): Q<PreformQ>) -> AppResult<Json<Value>> {
+    let mid = q.preform_material_id.ok_or_else(|| AppError::field("preform_material_id", "is required"))?;
+    let mut c = s.db.acquire().await?;
+    let loc = bh::production_location(&mut c, &user, q.location_id).await?;
+    let m = sqlx::query("SELECT name, stock_unit, min_stock, category, is_active FROM raw_materials WHERE id = $1").bind(mid).fetch_optional(&mut *c).await?;
+    let m = m.filter(|r| r.get::<bool, _>("is_active") && r.get::<String, _>("category") == "PREFORM")
+        .ok_or_else(|| AppError::field("preform_material_id", "must be an active PREFORM material"))?;
+    let avail = stock::available_at(&mut c, loc, ItemType::Raw, mid, "RM_STORE").await?;
+    let loc_name: String = sqlx::query_scalar("SELECT name FROM locations WHERE id = $1").bind(loc).fetch_one(&mut *c).await?;
+    Ok(Json(json!({ "material_id": mid, "name": m.get::<String, _>("name"), "unit": m.get::<String, _>("stock_unit"), "available": avail,
+        "min_stock": m.get::<Decimal, _>("min_stock"), "location_id": loc, "location_name": loc_name })))
 }
 
 async fn water_status(State(s): State<AppState>) -> AppResult<Json<Value>> {

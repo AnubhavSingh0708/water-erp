@@ -232,3 +232,32 @@ pub async fn allocate_free_fefo_at(conn: &mut PgConnection, location: Uuid, prod
     }
     Ok(out)
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Over-production guard. Finished goods can only come from a production batch, so no correction (positive adjustment,
+// count surplus) may make the quantity of a batch lot that is on record exceed `production_batches.crates`.
+// ---------------------------------------------------------------------------------------------------------------
+
+/// Crates of the batch lot currently on record in FG_READY + QC_QUARANTINE across ALL godowns including TRANSIT (crates on
+/// DISPATCHED trips / delivered / scrapped are not counted: a correction can only be blocked when the on-hand quantity alone is too much).
+/// The batch row must already be locked by the caller (`lock_batch_for_cap` does it) so concurrent writers serialise.
+pub async fn lot_on_record(conn: &mut PgConnection, batch_id: Uuid) -> AppResult<Decimal> {
+    Ok(sqlx::query_scalar::<_, Decimal>(
+        "SELECT COALESCE(SUM(qty),0) FROM stock_balances WHERE item_type='PRODUCT' AND lot_id=$1 AND zone IN ('FG_READY','QC_QUARANTINE')")
+        .bind(batch_id).fetch_one(&mut *conn).await?)
+}
+
+/// `409 OVER_PRODUCED` (never overridable by `confirm`) when adding `add` crates to the batch lot would exceed what the batch produced.
+/// Locks the batch row `FOR UPDATE` first (canonical order: batch row before stock balance rows), then reads the quantity in a NEW statement
+/// so a writer that committed while we waited for the lock is visible. `already_added` = crates the same request has staged but not posted yet.
+pub async fn guard_over_produced(conn: &mut PgConnection, batch_id: Uuid, add: Decimal, already_added: Decimal) -> AppResult<()> {
+    let b: Option<(i32, String)> = sqlx::query_as("SELECT crates, batch_no FROM production_batches WHERE id = $1 FOR UPDATE").bind(batch_id).fetch_optional(&mut *conn).await?;
+    let (produced, batch_no) = b.ok_or_else(|| AppError::not_found("Batch"))?;
+    let on_record = lot_on_record(&mut *conn, batch_id).await? + already_added;
+    if on_record + add > Decimal::from(produced) {
+        return Err(AppError::conflict_with("OVER_PRODUCED",
+            format!("Batch {batch_no} only produced {produced} crates; {} are already on record, so {} more cannot be added", on_record.normalize(), add.normalize()),
+            json!({ "batch_id": batch_id, "batch_no": batch_no, "produced": produced, "on_record": on_record, "adding": add })));
+    }
+    Ok(())
+}
