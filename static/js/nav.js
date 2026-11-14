@@ -12,6 +12,7 @@ export const PAGES = [
   { key: 'godowns', href: '/godowns.html', label: 'Godown transfers', short: 'Transfers', icon: 'transfer', perm: 'warehouse', child: true },
   { key: 'qr-labels', href: '/qr-labels.html', label: 'QR labels', short: 'QR', icon: 'qr', needsQr: true },
   { key: 'loading', href: '/loading.html', label: 'Loading & dispatch', short: 'Loading', icon: 'truck' },
+  { key: 'scan', href: '/scan.html', label: 'Scan', short: 'Scan', icon: 'scan' },
   { key: 'jars', href: '/jars.html', label: 'Returnable jars', short: 'Jars', icon: 'jar' },
   { key: 'maintenance', href: '/maintenance.html', label: 'Maintenance', short: 'Maintain', icon: 'wrench' },
   { key: 'admin', href: '/admin.html', label: 'Administration', short: 'Admin', icon: 'shield', adminOnly: true },

@@ -234,8 +234,8 @@ hr { border: 0; border-top: 1px solid var(--line); margin: var(--s4) 0; }
 /* More drawer */
 .nav-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s3); }
 .nav-tile {
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 84px; padding: var(--s3) var(--s2); border-radius: var(--r); background: var(--surface-2);
-  border: 1px solid var(--line); text-decoration: none; color: var(--ink); font-size: .85rem; font-weight: 700; text-align: center; line-height: 1.2;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 84px; padding: var(--s3) 4px; border-radius: var(--r); background: var(--surface-2); overflow-wrap: break-word; hyphens: auto;
+  border: 1px solid var(--line); text-decoration: none; color: var(--ink); font-size: .8rem; font-weight: 700; text-align: center; line-height: 1.2;
 }
 .nav-tile .i { width: 1.75rem; height: 1.75rem; color: var(--brand-700); }
 .nav-tile[aria-current="page"] { background: var(--brand-50); border-color: var(--brand-300); }
