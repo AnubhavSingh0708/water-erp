@@ -135,8 +135,15 @@ async fn product_update(State(st): State<AppState>, actor: AuthUser, ci: ClientI
     let v = product_validate(b, Some(&old))?;
     check_product_refs(&mut tx, &v, Some(id), Some(&old)).await?;
     if v.kind != old.kind {
-        let used: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM production_batches WHERE product_id = $1)").bind(id).fetch_one(&mut *tx).await?;
-        if used { return Err(AppError::conflict("IN_USE", "The kind cannot change after batches were produced for this product")); }
+        // batches, any stock row (jars received without a batch!), customer jar holdings, fleet history, open/closed loads and dispatches
+        let used: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM production_batches WHERE product_id = $1)
+                 OR EXISTS(SELECT 1 FROM stock_balances WHERE item_type = 'PRODUCT' AND item_id = $1)
+                 OR EXISTS(SELECT 1 FROM jar_ledger WHERE product_id = $1)
+                 OR EXISTS(SELECT 1 FROM jar_fleet_events WHERE product_id = $1)
+                 OR EXISTS(SELECT 1 FROM trip_items WHERE product_id = $1)
+                 OR EXISTS(SELECT 1 FROM dispatch_lines WHERE product_id = $1)").bind(id).fetch_one(&mut *tx).await?;
+        if used { return Err(AppError::conflict("IN_USE", "The kind cannot change once batches, stock, jar holdings or loads exist for this product")); }
     }
     sqlx::query("UPDATE products SET code=$2, name=$3, kind=$4, size_ml=$5, units_per_crate=$6, crates_per_pallet=$7, shelf_life_days=$8, min_stock_crates=$9,
                                      preform_material_id=$10, bottle_material_id=$11, max_cycles=$12, is_active=$13 WHERE id=$1")
