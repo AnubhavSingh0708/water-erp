@@ -440,7 +440,7 @@ a.badge { text-decoration: none; min-height: 44px; padding: 0 14px 0 10px; font-
 .tbl td.a { text-align: right; }
 .tbl td.num { white-space: nowrap; }
 .tbl td.a .btn-row { justify-content: flex-end; flex-wrap: wrap; }
-@media (min-width: 768px) { .tbl td.a .btn-row:has(> :nth-child(3)) { display: grid; grid-template-columns: repeat(2, max-content); justify-content: end; } }
+@media (min-width: 768px) { .tbl td.a .btn-row:has(.compact) { flex-wrap: nowrap; } }
 @media (min-width: 768px) { .tbl .btn.compact { min-width: 44px; padding: 0 10px; } .tbl .btn.compact .btn-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; } }
 .tbl tr.inactive td:not(.a) { color: var(--ink-3); }
 @media (max-width: 767.98px) {
