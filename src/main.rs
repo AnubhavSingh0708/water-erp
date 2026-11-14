@@ -50,7 +50,15 @@ async fn main() -> anyhow::Result<()> {
         let handle = axum_server::Handle::new();
         let (h, sd) = (handle.clone(), shutdown.clone());
         tokio::spawn(async move { sd.wait().await; h.graceful_shutdown(Some(std::time::Duration::from_secs(25))); });
-        axum_server::bind_rustls(cfg.bind, rustls_cfg).handle(handle).serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await?;
+        let mut server = axum_server::bind_rustls(cfg.bind, rustls_cfg).handle(handle);
+        // slow-loris defence: a client must finish its request headers within 10 s; HTTP/2 idle peers are probed and dropped
+        {
+            use hyper_util::rt::TokioTimer;
+            let b = server.http_builder();
+            b.http1().timer(TokioTimer::new()).header_read_timeout(std::time::Duration::from_secs(10));
+            b.http2().timer(TokioTimer::new()).keep_alive_interval(Some(std::time::Duration::from_secs(20))).keep_alive_timeout(std::time::Duration::from_secs(10));
+        }
+        server.serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await?;
     }
     // Order: stop accepting + drain requests (above) -> let workers notice the signal -> close DB pool.
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;

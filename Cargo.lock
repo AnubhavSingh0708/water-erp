@@ -3823,6 +3823,7 @@ dependencies = [
  "hex",
  "http",
  "http-body-util",
+ "hyper-util",
  "local-ip-address",
  "p256",
  "qrcode-generator",
