@@ -1,6 +1,6 @@
 // Service worker: precache the static shell, never touch /api/*, network-first HTML with offline fallback,
 // stale-while-revalidate for css/js/img. Bump VERSION when the precache list or caching rules change.
-const VERSION = 'v2';
+const VERSION = 'v3';
 const SHELL = `erp-shell-${VERSION}`;
 const RUNTIME = `erp-rt-${VERSION}`;
 const PRECACHE = [
