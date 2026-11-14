@@ -52,9 +52,20 @@ export function mountActions(panel, ctx) {
   ERP.godown.onChange(() => { if (view !== 'count') home(); else home(); });
 
   /* ------------------------------------------------------------------------------------------ adjust */
+  const zoneName = (g) => `${L.zoneLabel(g.zone)}${ERP.godown.multiple ? ` / ${ERP.godown.currentName()}` : ''}`;
+  /** Review sheet rows: the lot (before -> after) AND the item total in that zone (before -> after). */
+  function adjustEffects(fx, g, place) {
+    const row = fx[0]; if (!row) return fx;
+    const d = ui.toNum(row.delta); const lotAfter = row.after !== undefined && row.after !== null ? ui.toNum(row.after) : ui.toNum(g.have) + d;
+    const lotName = g.lot_label ? `Lot ${g.lot_label}` : 'Lot balance';
+    const n = (v) => ui.fmtNum(v, 4);
+    const lot = { ...row, zone: `${lotName}: ${n(g.have)} \u2192 ${n(lotAfter)}`, after: undefined, unit: g.unit };
+    const total = { item_name: `Total of ${row.item_name}`, zone: `All lots in ${place}: ${n(g.zoneTotal)} \u2192 ${n(ui.toNum(g.zoneTotal) + d)}`, delta: row.delta, unit: g.unit };
+    return [lot, total, ...fx.slice(1)];
+  }
   function adjustForm() {
     const picker = L.stockPicker({ locationId: loc, zones: ['RM_STORE', 'BLOW_FLOOR', 'FG_READY', 'SCRAP_YARD', 'JAR_EMPTY', 'JAR_CLEAN'], mode: 'adjust', onChange: upd });
-    const dir = ui.segmented({ options: [{ value: 'add', label: 'Add stock' }, { value: 'remove', label: 'Remove stock' }], value: 'add', label: 'Add or remove', onChange: () => upd() });
+    const dir = ui.segmented({ options: [{ value: 'add', label: 'Add stock' }, { value: 'remove', label: 'Remove stock' }], value: 'add', label: 'Add or remove', onChange: () => { picker.setAdding(dir.value === 'add'); upd(); } });
     const q = L.unitInput({ name: 'qty', label: 'How much?', unit: '', required: true });
     const code = ui.field({ label: 'Reason', name: 'reason_code', type: 'select', required: true, options: [{ value: '', label: 'Choose a reason...' }, ...L.optionsOf(L.ADJ_REASONS)] });
     const reason = ui.field({ label: 'Explain what happened', name: 'reason', type: 'textarea', required: true, rows: 2, maxlength: 300, help: 'At least 5 letters, e.g. "Counted 118, system showed 120".' });
@@ -83,7 +94,7 @@ export function mountActions(panel, ctx) {
       if (reason.get().trim().length < 5) { reason.setError('Please explain (at least 5 letters)'); bad = true; } else reason.setError('');
       if (bad) { form.querySelector('.has-error input, .has-error select, .has-error textarea')?.focus(); return; }
       const body = { ...withLoc(), item_type: g.item_type, item_id: g.item_id, zone: g.zone, ...(g.lot_id ? { lot_id: g.lot_id } : {}), delta: `${dir.value === 'remove' ? '-' : ''}${q.get().trim()}`, reason: reason.get().trim(), reason_code: code.get() };
-      const r = await L.submitDocument({ flow, form, button: submit, path: '/api/warehouse/adjustments', body, title: 'Review adjustment', confirmText: 'Save adjustment', summary: 'Adjustments are permanent entries in the stock ledger - they are corrected with another entry, never deleted.' });
+      const r = await L.submitDocument({ flow, form, button: submit, path: '/api/warehouse/adjustments', body, title: 'Review adjustment', confirmText: 'Save adjustment', decorate: (fx) => adjustEffects(fx, g, zoneName(g)), summary: 'Adjustments are permanent entries in the stock ledger - they are corrected with another entry, never deleted.' });
       if (r) { ui.toast.ok(`${r.item}: balance is now ${ui.fmtNum(r.balance_after, 4)}`); (r.warnings || []).forEach((w) => ui.toast.warn(w)); home(); }
     });
     formView('Adjust stock', form, submit, 'Use this to correct the system after a count or when an entry was wrong. Stock held by QC cannot be adjusted here.');

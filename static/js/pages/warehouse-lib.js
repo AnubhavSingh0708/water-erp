@@ -5,6 +5,7 @@ import { api } from '/js/api.js';
 import * as ui from '/js/ui.js';
 import * as drafts from '/js/drafts.js';
 import { godown } from '/js/nav.js';
+import { ERP } from '/js/shell.js';
 
 const { el, icon } = ui;
 export { el, icon };
@@ -222,7 +223,7 @@ export function makeFlow() { return { act: api.action(), retrySig: null }; }
  * (user went back / error shown in the form). A network failure after the review leaves "Not sent - Retry" and the next
  * press skips straight to the resend with the SAME key (the server replays the first success instead of duplicating).
  */
-export async function submitDocument({ flow, form, button, path, body, title, confirmText, danger = false, summary, dry = true, sendConfirm = true, onStale, onError, units, method = 'post' }) {
+export async function submitDocument({ flow, form, button, path, body, title, confirmText, danger = false, summary, dry = true, sendConfirm = true, onStale, onError, units, method = 'post', decorate }) {
   ui.clearFormError(form);
   if (button) resetBtnLabel(button);
   const sig = JSON.stringify([path, body]);
@@ -231,7 +232,8 @@ export async function submitDocument({ flow, form, button, path, body, title, co
     if (dry && flow.retrySig !== sig) {
       const d = await api.busy(button, () => api.dryRun(path, body));
       const u = units || await unitMap().catch(() => null);
-      const ok = await ui.reviewSheet({ title, effects: prepEffects(d.effects, u), warnings: d.warnings || [], confirmText, danger, summary });
+      let fx = prepEffects(d.effects, u); if (decorate) fx = decorate(fx, d) || fx;
+      const ok = await ui.reviewSheet({ title, effects: fx, warnings: d.warnings || [], confirmText, danger, summary });
       if (!ok) return null;
       warnings = d.warnings || [];
     }
@@ -379,7 +381,7 @@ export function stockPicker({ locationId, zones, mode = 'existing', onChange, na
   [zoneF, itemF, lotF].forEach((f) => { f.input.dataset.nodraft = '1'; });
   const info = el('div.pick-info', { 'aria-live': 'polite' });
   const root = el('div.stack.tight.picker', {}, zoneF.el, itemF.el, lotF.el, info);
-  let items = []; let lots = []; let seq = 0;
+  let items = []; let lots = []; let seq = 0; let adding = mode === 'adjust'; let hereLots = []; let candidates = []; let itemNote = '';
   const fire = () => { if (onChange) onChange(get()); };
   const itemKey = (x) => `${x.item_type}:${x.item_id}`;
   function setOptions(f, options, value) {
@@ -411,40 +413,78 @@ export function stockPicker({ locationId, zones, mode = 'existing', onChange, na
   }
   async function loadLots() {
     const my = ++seq; const it = items.find((x) => itemKey(x) === itemF.get()); const zone = zoneF.get();
-    lots = []; if (!it) { setOptions(lotF, [{ value: '', label: 'Choose an item first' }], ''); paint(); fire(); return; }
+    lots = []; hereLots = []; candidates = []; itemNote = '';
+    if (!it) { setOptions(lotF, [{ value: '', label: 'Choose an item first' }], ''); paint(); fire(); return; }
     setOptions(lotF, [{ value: '', label: 'Loading...' }], '');
     try {
       const d = await api.get('/api/warehouse/stock/item', { item_type: it.item_type, item_id: it.item_id, location_id: locationId() });
       if (my !== seq) return;
-      lots = (d.lots || []).filter((l) => l.zone === zone).map((l) => ({ ...l, lot_id: l.lot_id === NIL_UUID ? null : l.lot_id }));
-      const opts = lots.map((l) => ({ value: l.lot_id || 'none', label: lotLabel(l, it) }));
-      if (mode === 'adjust' && it.item_type === 'RAW' && !lots.some((l) => !l.lot_id)) opts.push({ value: 'none', label: 'No lot (general stock)' });
-      if (!opts.length) opts.push({ value: '', label: it.item_type === 'PRODUCT' && zone === 'FG_READY' ? 'No batch of this product in stock here' : 'No lot on record' });
-      setOptions(lotF, opts.length > 1 ? [{ value: '', label: 'Choose the lot...' }, ...opts] : opts, opts.length === 1 && opts[0].value ? opts[0].value : '');
-    } catch (e) { setOptions(lotF, [{ value: '', label: 'Could not load lots' }], ''); ui.toastError(e); }
-    paint(); fire();
+      const norm = (l) => ({ ...l, lot_id: l.lot_id === NIL_UUID ? null : l.lot_id });
+      hereLots = (d.lots || []).filter((l) => l.zone === zone).map(norm);
+      if (mode === 'adjust') candidates = await findOtherLots(it, zone, (d.lots || []).map(norm), my);
+      if (my !== seq) return;
+    } catch (e) { if (my === seq) { setOptions(lotF, [{ value: '', label: 'Could not load lots' }], ''); ui.toastError(e); } return; }
+    buildLots(); paint(); fire();
+  }
+  /**
+   * Lots the item is known by but that hold nothing in this zone (yet): lots in another zone / godown, and - for finished goods -
+   * the approved batches of the product (needs the production page; skipped silently without it). Lets "stock found" go into a lot
+   * whose balance is zero. RAW lots must already exist somewhere (the server refuses invented lot ids).
+   */
+  async function findOtherLots(it, zone, hereAllZones, my) {
+    const found = new Map(); const add = (l, where) => { if (!l.lot_id || found.has(l.lot_id)) return; found.set(l.lot_id, { lot_id: l.lot_id, lot_label: l.lot_label, expiry_date: l.expiry_date || null, qc_status: l.qc_status || null, zone, qty: '0', reserved: 0, extra: true, where }); };
+    hereAllZones.filter((l) => l.zone !== zone && l.lot_id).forEach((l) => add(l, `${ui.fmtNum(l.qty, 4)} in ${zoneLabel(l.zone)}`));
+    const jobs = [];
+    jobs.push(api.get('/api/warehouse/stock/item', { item_type: it.item_type, item_id: it.item_id, location_id: 'all' }).then((d) => (d.lots || []).filter((l) => l.lot_id && l.lot_id !== NIL_UUID && !(l.location_id === locationId() && l.zone === zone)).forEach((l) => add(l, `${ui.fmtNum(l.qty, 4)} at ${l.location_name || 'another godown'}`))).catch(() => {}));
+    const may = ERP.me && (ERP.me.is_admin || (ERP.me.allowed_pages || []).includes('production'));
+    if (it.item_type === 'PRODUCT' && zone === 'FG_READY' && may) {
+      jobs.push(api.get('/api/production/batches', { product_id: it.item_id, qc_status: 'APPROVED', limit: 100 }).then((d) => (d.items || []).forEach((b) => add({ lot_id: b.id, lot_label: b.batch_no, expiry_date: b.expiry_date, qc_status: b.qc_status }, 'approved batch'))).catch(() => {}));
+    }
+    await Promise.all(jobs);
+    if (my !== seq) return [];
+    return [...found.values()].filter((c) => (it.item_type === 'PRODUCT' && zone === 'FG_READY' ? c.qc_status === 'APPROVED' : true))
+      .filter((c) => !hereLots.some((h) => h.lot_id === c.lot_id));
+  }
+  function buildLots() {
+    const it = items.find((x) => itemKey(x) === itemF.get()); const zone = zoneF.get(); if (!it) return;
+    const prev = lotF.get();
+    lots = [...hereLots]; if (mode === 'adjust' && adding) lots.push(...candidates);
+    const opts = lots.map((l) => ({ value: l.lot_id || 'none', label: lotLabel(l, it) }));
+    const jarNil = it.item_type === 'PRODUCT' && (zone === 'JAR_EMPTY' || zone === 'JAR_CLEAN');
+    if (mode === 'adjust' && adding && !lots.some((l) => !l.lot_id) && (it.item_type === 'RAW' || jarNil)) opts.push({ value: 'none', label: it.item_type === 'RAW' ? 'No lot (general stock)' : 'Containers (no lot)' });
+    itemNote = '';
+    if (!opts.length) {
+      opts.push({ value: '', label: mode === 'adjust' && adding ? 'No lot to add to' : it.item_type === 'PRODUCT' && zone === 'FG_READY' ? 'No batch of this product in stock here' : 'No lot on record' });
+      if (mode === 'adjust' && adding) itemNote = it.item_type === 'PRODUCT' ? 'There is no approved batch of this product to add to. Finished goods come from production: a batch only counts once Lab QC approves it.' : 'This material has never been received as a lot. New stock arrives through Raw materials > Receive goods (GRN), not through an adjustment.';
+    } else if (mode === 'adjust' && adding && candidates.length) itemNote = 'Lots marked "0 here" hold nothing in this zone yet - pick one to add stock found there.';
+    setOptions(lotF, opts.length > 1 ? [{ value: '', label: 'Choose the lot...' }, ...opts] : opts, opts.some((o) => o.value === prev && prev) ? prev : (opts.length === 1 && opts[0].value ? opts[0].value : ''));
   }
   const lotLabel = (l, it) => {
     const name = l.lot_label || (l.lot_id ? l.lot_id.slice(0, 8) : (it.item_type === 'PRODUCT' ? 'Containers' : 'Opening stock'));
     const exp = l.expiry_date ? ` - exp ${ui.fmtDate(l.expiry_date)}` : '';
     const res = ui.toNum(l.reserved) > 0 ? ` - ${ui.fmtNum(l.reserved, 0)} held for loading` : '';
+    if (l.extra) return `${name} - 0 here${l.where ? ` (${l.where})` : ''}${exp}`;
     return `${name} - ${ui.fmtNum(l.qty, 4)}${exp}${res}`;
   };
   function get() {
     const it = items.find((x) => itemKey(x) === itemF.get()); if (!it) return null;
     const v = lotF.get(); const lot = lots.find((l) => (l.lot_id || 'none') === v);
-    if (!lot && !(mode === 'adjust' && it.item_type === 'RAW' && v === 'none')) return null;
+    if (!lot && !(mode === 'adjust' && v === 'none')) return null;
     const have = lot ? ui.toNum(lot.qty) : 0; const reserved = lot ? (ui.toNum(lot.reserved) || 0) : 0;
     return {
       item_type: it.item_type, item_id: it.item_id, name: it.name, unit: it.unit, kind: it.kind, cpp: it.crates_per_pallet || null, zone: zoneF.get(),
       lot_id: lot ? lot.lot_id : null, lot_label: lot ? lot.lot_label : null, have: lot ? lot.qty : '0', reserved: String(reserved), free: String(Math.max(0, have - reserved)),
       expiry_date: lot ? lot.expiry_date : null, qc_status: lot ? lot.qc_status : null, whole: it.item_type === 'PRODUCT',
+      zoneTotal: String(hereLots.reduce((a, l) => a + ui.toNum(l.qty), 0)),   // everything the item holds in this zone of this godown (all lots)
+      extra: !!(lot && lot.extra),
     };
   }
   function paint() {
     ui.clear(info);
+    if (itemNote) info.append(el('span.pick-note', {}, icon('info', 'sm'), itemNote));
     const g = get(); if (!g) return;
     const parts = [el('span', {}, 'On hand: ', el('b', { text: ui.fmtQty(g.have, g.unit, 4) }))];
+    if (g.extra) parts.push(el('span.chip-s.info', { text: `Nothing of this lot in ${zoneLabel(g.zone)} yet` }));
     if (ui.toNum(g.reserved) > 0) parts.push(el('span.chip-s.warn', { text: `${ui.fmtNum(g.reserved, 0)} held for loading - free ${ui.fmtNum(g.free, 0)}` }));
     if (g.expiry_date) { const d = daysBetween(g.expiry_date); parts.push(el('span.chip-s', { class: d < 0 ? 'bad' : d <= 30 ? 'warn' : '', text: d < 0 ? `Expired ${ui.fmtDate(g.expiry_date)}` : `Expires ${ui.fmtDate(g.expiry_date)}` })); }
     info.append(...parts);
@@ -453,7 +493,8 @@ export function stockPicker({ locationId, zones, mode = 'existing', onChange, na
   itemF.input.addEventListener('change', loadLots);
   lotF.input.addEventListener('change', () => { paint(); fire(); });
   loadItems();
-  return { el: root, get, reload: loadItems, zoneInput: zoneF.input, fields: { zoneF, itemF, lotF } };
+  const setAdding = (v) => { v = !!v; if (v === adding) return; adding = v; if (itemF.get()) { buildLots(); paint(); fire(); } };
+  return { el: root, get, reload: loadItems, setAdding, zoneInput: zoneF.input, fields: { zoneF, itemF, lotF } };
 }
 
 /* ------------------------------------------------------------------------------------------------ mini bar chart (CSS only) */
