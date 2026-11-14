@@ -812,3 +812,8 @@ DO $$ DECLARE r RECORD; BEGIN
   FOR r IN SELECT * FROM (VALUES ('locations','master'), ('godown_transfers','stock'), ('godown_transfer_lines','stock')) AS t(tbl, topic) LOOP
     EXECUTE format('CREATE TRIGGER %I AFTER INSERT OR UPDATE OR DELETE ON %I FOR EACH STATEMENT EXECUTE FUNCTION erp_notify(%L)', 'evt_'||r.tbl, r.tbl, r.topic);
   END LOOP; END $$;
+
+-- ===== migrations/0020_branding.sql =====
+-- Company branding: Neersagar. Only replaces the untouched factory defaults (never overwrites a value an Admin has set).
+UPDATE system_settings SET value = '"Neersagar"' WHERE key = 'plant.name' AND value = '"Aqua Pure Plant"';
+UPDATE system_settings SET value = '"NSG"'       WHERE key = 'plant.code' AND value = '"PLT1"';
