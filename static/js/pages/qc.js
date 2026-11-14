@@ -154,7 +154,7 @@ async function showDetail(id) {
 
   /* test submit */
   const flow = L.makeFlow();
-  testForm.addEventListener('submit', async (ev) => {
+  testForm.addEventListener('submit', L.once(async (ev) => {
     ev.preventDefault(); ui.clearFormError(form_());
     let bad = false; const body = { result: result.value };
     const num = (f, label, hi) => { const t = f.get(); if (t === '') { f.setError(''); return; } const p = L.qtyProblem(t, { allowZero: true }); const n = L.dec(t); f.setError(p || (n !== null && n > hi ? `${label} must be at most ${hi}` : '')); if (p || (n !== null && n > hi)) bad = true; else body[f.input.name] = t.trim(); };
@@ -168,7 +168,7 @@ async function showDetail(id) {
     if (result.value === 'PASS' && issues.length && !(await ui.confirmDialog({ title: 'You marked PASS but...', message: 'Some readings look wrong. Save PASS anyway?', warnings: issues, confirmText: 'Yes, save PASS', cancelText: 'Go back', danger: true }))) return;
     const r = await L.submitPlain({ flow, form: testForm, button: testBtn, path: `/api/qc/batches/${id}/tests`, body, onStale: () => reload(true) });
     if (r) { d = r; paint(); ui.toast.ok(`Test saved: ${r.tests[0].result}`); resetForm(); }
-  });
+  }));
   const form_ = () => testForm;
   function resetForm() { [tds, ph, oz, tu].forEach((f) => f.set('')); [micro, seal, labl].forEach((x) => x.seg.set('')); remarks.set(''); paintHints(); }
 
