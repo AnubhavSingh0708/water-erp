@@ -105,8 +105,9 @@ pub async fn idempotency(State(s): State<AppState>, req: Request, next: Next) ->
                 Ok(r)
             }
             // older than the request timeout and still unfinished: the first attempt timed out / was interrupted and its outcome is UNKNOWN
-            _ if row.3 > 35.0 => Err(AppError::conflict("IN_PROGRESS",
-                format!("An earlier attempt with this key timed out or was interrupted, so it is not known whether it was saved. Check the records before doing it again; this key is released after {STALE_KEY_MINUTES} minutes"))),
+            _ if row.3 > 35.0 => Err(AppError::conflict_with("IN_PROGRESS",
+                format!("An earlier attempt with this key timed out or was interrupted, so it is not known whether it was saved. Check the records before doing it again; this key is released after {STALE_KEY_MINUTES} minutes"),
+                serde_json::json!({ "outcome_unknown": true, "released_after_minutes": STALE_KEY_MINUTES }))),
             _ => Err(AppError::conflict("IN_PROGRESS", "The same request is still being processed")),
         };
     }
