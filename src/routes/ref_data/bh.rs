@@ -66,7 +66,7 @@ impl<S: Send + Sync> FromRequestParts<S> for Id {
 #[derive(Debug, Default, Deserialize)]
 pub struct DryQ { #[serde(default)] pub dry_run: Option<String> }
 impl DryQ {
-    pub fn on(&self) -> bool { matches!(self.dry_run.as_deref(), Some("1") | Some("true") | Some("")) }
+    pub fn on(&self) -> bool { crate::util::dry_value(self.dry_run.as_deref()) }
 }
 
 // ------------------------------------------------------------------------------------------------------------------

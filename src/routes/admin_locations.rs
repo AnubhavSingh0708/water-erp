@@ -94,10 +94,14 @@ async fn ensure_unused(conn: &mut PgConnection, id: Uuid) -> AppResult<()> {
     let stock_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM stock_balances WHERE location_id = $1 AND qty > 0").bind(id).fetch_one(&mut *conn).await?;
     let transfers: i64 = sqlx::query_scalar("SELECT count(*) FROM godown_transfers WHERE status = 'IN_TRANSIT' AND (from_location_id = $1 OR to_location_id = $1)")
         .bind(id).fetch_one(&mut *conn).await?;
-    if stock_rows > 0 || transfers > 0 {
+    // settlement / gate-pass void / dispatch void restock into the trip's godown WITHOUT re-validating it: an open trip would land
+    // returned crates in an unselectable godown
+    let trips: i64 = sqlx::query_scalar("SELECT count(*) FROM loading_trips WHERE location_id = $1 AND status IN ('LOADING','DISPATCHED')")
+        .bind(id).fetch_one(&mut *conn).await?;
+    if stock_rows > 0 || transfers > 0 || trips > 0 {
         return Err(AppError::conflict_with("IN_USE",
-            "This godown cannot be deactivated while it holds stock or has transfers in transit. Move or receive the stock first.",
-            json!({ "stock_rows": stock_rows, "transfers_in_transit": transfers })));
+            "This godown cannot be deactivated while it holds stock, has transfers in transit or has open loading trips (loading / on the road). Move or receive the stock and settle the trips first.",
+            json!({ "stock_rows": stock_rows, "transfers_in_transit": transfers, "open_trips": trips })));
     }
     Ok(())
 }

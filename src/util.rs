@@ -12,6 +12,39 @@ pub async fn next_no(conn: &mut PgConnection, seq: &'static str, prefix: &str) -
     Ok(format!("{prefix}-{d}-{n:04}"))
 }
 
+/// THE definition of "dry run": the `dry_run` query value is present and not one of `0`, `false`, `no`, `off` (any case).
+/// An unrecognised value (`yes`, `True`, `2` ...) therefore means DRY RUN - fail safe: a review call must never commit.
+/// Every handler family and the idempotency middleware use this one predicate (they used to disagree: `?dry_run=yes` committed).
+pub fn dry_value(v: Option<&str>) -> bool {
+    match v {
+        None => false,
+        Some(s) => !matches!(s.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off"),
+    }
+}
+
+/// Percent-decode a query component (`+` is a space). Invalid escapes are kept literally.
+fn pct_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'+' { out.push(b' '); i += 1; continue; }
+        if b[i] == b'%' && i + 3 <= b.len() {
+            if let Some(v) = std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|x| u8::from_str_radix(x, 16).ok()) { out.push(v); i += 3; continue; }
+        }
+        out.push(b[i]); i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// True when ANY `dry_run` pair of the (percent-decoded) query string is a dry run per `dry_value`.
+pub fn dry_run_in_query(q: Option<&str>) -> bool {
+    q.map_or(false, |q| q.split('&').any(|p| {
+        let (k, v) = p.split_once('=').map_or((p, None), |(k, v)| (k, Some(v)));
+        pct_decode(k) == "dry_run" && dry_value(Some(&v.map(pct_decode).unwrap_or_default()))
+    }))
+}
+
 /// Round a Decimal up to a whole number (used for purchase-unit recommendations).
 pub fn ceil(d: Decimal) -> Decimal { d.ceil() }
 

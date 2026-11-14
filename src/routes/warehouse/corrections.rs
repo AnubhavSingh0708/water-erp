@@ -454,7 +454,7 @@ pub async fn count_post(State(s): State<AppState>, user: AuthUser, Id(id): Id, Q
     // serialise with loaders: lock all affected batch rows first (stable order)
     if zone == "FG_READY" {
         let lots: Vec<Uuid> = lines.iter().filter(|l| l.get::<String, _>("item_type") == "PRODUCT").map(|l| l.get::<Uuid, _>("lot_id")).collect();
-        sqlx::query("SELECT id FROM production_batches WHERE id = ANY($1) ORDER BY id FOR UPDATE").bind(&lots).execute(&mut *tx).await?;
+        sqlx::query("SELECT id FROM production_batches WHERE id = ANY($1) ORDER BY expiry_date ASC, created_at ASC, id ASC FOR UPDATE").bind(&lots).execute(&mut *tx).await?;
     }
     let mut moves = vec![];
     let mut warnings = vec![];

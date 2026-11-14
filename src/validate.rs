@@ -43,7 +43,10 @@ pub fn count(field: &str, n: i64) -> AppResult<()> {
 pub fn text(field: &str, s: &str, max: usize) -> AppResult<String> {
     let t = s.trim();
     if t.chars().count() > max { return Err(AppError::field(field, &format!("must be at most {max} characters"))); }
-    if t.chars().any(|c| c.is_control() && c != '\n' && c != '\t') { return Err(AppError::field(field, "contains invalid characters")); }
+    // control characters, plus invisible bidi overrides / BOM ("trojan source" display spoofing of names in lists and printouts).
+    // ZWJ / ZWNJ (U+200C/D) stay allowed: Indic scripts need them.
+    let spoof = |c: char| matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}');
+    if t.chars().any(|c| (c.is_control() && c != '\n' && c != '\t') || spoof(c)) { return Err(AppError::field(field, "contains invalid characters")); }
     Ok(t.to_string())
 }
 pub fn required_text(field: &str, s: &str, max: usize) -> AppResult<String> {

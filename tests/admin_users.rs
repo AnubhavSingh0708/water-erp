@@ -213,13 +213,14 @@ async fn settings_validation_is_all_or_nothing_and_live(pool: PgPool) {
     let (s, l) = req(&app, "GET", "/api/admin/settings", Some(&k), None).await;
     assert_eq!(s, StatusCode::OK);
     assert!(l.as_array().unwrap().iter().any(|x| x["key"] == "plant.name" && x["description"].is_string()));
-    // one valid + one invalid => nothing applied
+    // one valid + one invalid => nothing applied (the default plant name is whatever the migrations seed, e.g. the 0020 branding)
+    let default_name = st.settings.get().plant_name.clone();
     let (s, b) = req(&app, "PUT", "/api/admin/settings", Some(&k), Some(json!({"plant.name":"Changed Name","auth.max_failed_logins":0}))).await;
     assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
     assert!(b["error"]["fields"]["auth.max_failed_logins"].is_string());
-    assert_eq!(st.settings.get().plant_name, "Aqua Pure Plant");
+    assert_eq!(st.settings.get().plant_name, default_name);
     let name: Value = sqlx::query_scalar("SELECT value FROM system_settings WHERE key='plant.name'").fetch_one(&pool).await.unwrap();
-    assert_eq!(name, json!("Aqua Pure Plant"));
+    assert_eq!(name, json!(default_name));
     // bad cases
     for (k_, v) in [("nope.key", json!(1)), ("auth.session_ttl_hours", json!("12")), ("auth.session_ttl_hours", json!(99999)), ("auth.lockout_minutes", json!(1.5)),
                     ("features.qr_labels", json!("yes")), ("plant.name", json!("")), ("plant.name", json!("x".repeat(121))), ("plant.code", json!("bad code!")),
@@ -238,7 +239,7 @@ async fn settings_validation_is_all_or_nothing_and_live(pool: PgPool) {
     let cur = st.settings.get();
     assert_eq!((cur.plant_name.as_str(), cur.qr_labels_enabled, cur.max_failed_logins), ("Crystal Springs", true, 3));
     let (_, d): (i64, Value) = sqlx::query_as("SELECT count(*), details FROM audit_logs WHERE action='SETTINGS_UPDATE' GROUP BY details").fetch_one(&pool).await.unwrap();
-    assert_eq!(d["changes"]["plant.name"]["old"], "Aqua Pure Plant");
+    assert_eq!(d["changes"]["plant.name"]["old"], default_name);
 }
 
 #[sqlx::test(migrations = "./migrations")]
