@@ -223,6 +223,11 @@ export function promptDialog({ title, label, help, confirmText = 'Save', min = 0
   return dlg.closed.then((r) => (typeof r === 'string' ? r : null));
 }
 
+/** "Product · BATCH-NO": keep the batch number in one piece (never broken at its hyphens). */
+function itemTitle(text) {
+  const [name, ...rest] = String(text).split(' \u00b7 ');
+  return el('b', {}, name, rest.length ? [' \u00b7 ', el('span.nowrap', { text: rest.join(' \u00b7 ') })] : null);
+}
 /** unitLabel('containers', 1) -> 'container'; unitLabel({one:'box', other:'boxes'}, 2) -> 'boxes'. No unit -> ''. */
 export function unitLabel(unit, n) {
   if (!unit) return '';
@@ -244,7 +249,7 @@ export function reviewSheet({ title = 'Review before saving', effects = [], warn
     const u = unitLabel(e.unit || unit, d);
     const moves = Number.isFinite(d) && d !== 0;
     const sub = [e.zone, moves && e.after !== undefined && e.after !== null ? `will be ${fmtNum(e.after, decimals)}` : '', e.note].filter(Boolean).join(' - ');
-    return el('div.effect', {}, el('div.grow', {}, el('b', { text: e.item_name || e.item || '' }), sub ? el('small', { text: sub }) : null),
+    return el('div.effect', {}, el('div.grow', {}, itemTitle(e.item_name || e.item || ''), sub ? el('small', { text: sub }) : null),
       moves ? el('span.delta', { class: d < 0 ? 'neg' : 'pos' }, `${d > 0 ? '+' : '-'}${fmtNum(Math.abs(d), decimals)}${u ? ' ' + u : ''}`) : (e.right ? el('span.delta', { text: String(e.right) }) : null));
   })) : el('p.muted', { text: emptyText });
   const body = el('div.stack', {}, summary || intro ? el('p', { text: summary || intro }) : null, before || null, list,

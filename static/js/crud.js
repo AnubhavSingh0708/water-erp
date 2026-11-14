@@ -189,12 +189,18 @@ export function createCrud(host, cfg) {
     const cols = cfg.columns.map((c) => ({ ...c }));
     if (!cfg.noStatus) cols.push({ label: 'Status', cls: 's', render: (r) => (r.is_active === false ? ui.badge('INACTIVE') : ui.badge('ACTIVE')) });
     cols.push({
-      label: '', cls: 'a', render: (r) => el('div.btn-row', {},
-        el('button.btn.secondary.sm', { type: 'button', on: { click: () => edit(r) } }, icon('edit', 'sm'), 'Edit'),
-        ...(cfg.rowActions || []).filter((a) => !a.show || a.show(r)).map((a) => el('button.btn.sm', { type: 'button', class: a.danger ? 'danger outline' : 'secondary', on: { click: (ev) => a.onClick(r, api_, ev.currentTarget) } }, icon(a.icon || 'list', 'sm'), typeof a.label === 'function' ? a.label(r) : a.label)),
-        cfg.noDelete ? null : (r.is_active === false
-          ? el('button.btn.secondary.sm', { type: 'button', on: { click: (ev) => reactivate(r, ev.currentTarget) } }, icon('refresh', 'sm'), 'Reactivate')
-          : el('button.btn.danger.outline.sm', { type: 'button', on: { click: () => deactivate(r) } }, icon('ban', 'sm'), cfg.deactivateLabel || 'Deactivate'))),
+      label: '', cls: 'a', render: (r) => {
+        // 3+ actions: icon-only (with title + aria-label) on desktop tables so the row never outgrows the page; labelled on phone cards
+        const acts = [
+          { label: 'Edit', icon: 'edit', cls: 'secondary', on: () => edit(r) },
+          ...(cfg.rowActions || []).filter((a) => !a.show || a.show(r)).map((a) => ({ label: typeof a.label === 'function' ? a.label(r) : a.label, icon: a.icon || 'list', cls: a.danger ? 'danger outline' : 'secondary', on: (ev) => a.onClick(r, api_, ev.currentTarget) })),
+          ...(cfg.noDelete ? [] : [r.is_active === false
+            ? { label: 'Reactivate', icon: 'refresh', cls: 'secondary', on: (ev) => reactivate(r, ev.currentTarget) }
+            : { label: cfg.deactivateLabel || 'Deactivate', icon: 'ban', cls: 'danger outline', on: () => deactivate(r) }]),
+        ];
+        const compact = acts.length > 2;
+        return el('div.btn-row', {}, acts.map((a) => el('button.btn.sm', { type: 'button', class: a.cls + (compact ? ' compact' : ''), title: compact ? a.label : undefined, 'aria-label': compact ? a.label : undefined, on: { click: a.on } }, icon(a.icon, 'sm'), compact ? el('span.btn-text', { text: a.label }) : a.label)));
+      },
     });
     return cols;
   };
