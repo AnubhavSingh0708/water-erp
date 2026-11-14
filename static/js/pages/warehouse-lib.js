@@ -492,3 +492,12 @@ export const isPositive = (text) => { const n = dec(text); return n !== null && 
 export const todayMinus = (days) => ui.addDays(ui.todayPlant(), -days);
 
 export const toTop = () => { try { window.scrollTo({ top: 0, behavior: 'instant' }); } catch { window.scrollTo(0, 0); } };
+
+export const TXN_LABEL = {
+  GRN: 'Received (GRN)', GRN_VOID: 'GRN voided', RTV_OUT: 'Returned to supplier', BLOW_ISSUE: 'Issued to blow molding', BATCH_CONSUME: 'Used in batch', BATCH_WASTE: 'Batch waste',
+  BATCH_OUTPUT: 'Batch output', QC_RELEASE: 'Released by QC', QC_REJECT: 'Rejected by QC', ADJUST: 'Adjustment', TRANSFER: 'Moved between zones', WRITE_OFF: 'Written off', DISPOSE: 'Disposed',
+  GODOWN_TRANSFER_OUT: 'Sent to another godown', GODOWN_TRANSFER_IN: 'Received from godown', GODOWN_TRANSFER_CANCEL: 'Transfer cancelled', BLOW_OUTPUT: 'Blow output', BLOW_SCRAP: 'Blow scrap',
+  TRANSIT_DAMAGE: 'Damaged in transit', TRANSFER_SHORT: 'Short in transit', GATE_PASS: 'Loaded (gate pass)', GATE_PASS_VOID: 'Gate pass voided', DISPATCH: 'Direct dispatch', DISPATCH_VOID: 'Dispatch voided',
+  TRIP_RETURN: 'Returned from trip', TRIP_DAMAGED: 'Damaged on trip', JAR_PURCHASE: 'New jars bought', JAR_WASH: 'Jars washed', JAR_RECEIVE: 'Empty jars received',
+};
+export const txnLabel = (t) => TXN_LABEL[t] || String(t || '').replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
