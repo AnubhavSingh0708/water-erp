@@ -313,6 +313,7 @@ a.kpi:hover { border-color: var(--brand-300); box-shadow: var(--shadow); }
 .page > .action-bar, .stack > .action-bar { margin: 0 calc(-1 * var(--s4)); }
 @media (min-width: 768px) { .action-bar .btn.primary { flex: 0 0 auto; min-width: 12rem; } .page > .action-bar, .stack > .action-bar { margin: 0 calc(-1 * var(--s5)); } }
 @media (min-width: 1024px) { .action-bar { bottom: 0; } .page > .action-bar, .stack > .action-bar { margin: 0 calc(-1 * var(--s6)); padding-left: var(--s6); padding-right: var(--s6); } }
+.card > .action-bar { border-radius: 0 0 var(--r) var(--r); }
 .dlg .action-bar { position: sticky; bottom: 0; margin: var(--s4) calc(-1 * var(--s4)) 0; border-radius: 0; }
 
 /* ---- forms -------------------------------------------------------------- */
@@ -387,6 +388,7 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 /* segmented control + tabs */
 .seg { display: inline-flex; background: var(--neutral-bg); padding: 3px; border-radius: 12px; gap: 2px; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
 .seg::-webkit-scrollbar { display: none; }
+@media (max-width: 479.98px) { .seg { display: flex; width: 100%; } .seg button { padding: 0 8px; font-size: .9rem; } }
 .seg button { flex: 1 0 auto; min-height: 44px; padding: 0 var(--s4); border: 0; border-radius: 9px; background: transparent; color: var(--ink-2); font-weight: 700; cursor: pointer; white-space: nowrap; font-size: .95rem; }
 .seg button[aria-pressed="true"], .seg button[aria-selected="true"] { background: var(--surface); color: var(--brand-800); box-shadow: var(--shadow-sm); }
 .tabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--line); margin: 0 calc(-1 * var(--s4)) var(--s4); padding: 0 var(--s4); -webkit-overflow-scrolling: touch; }
@@ -435,8 +437,9 @@ a.badge { text-decoration: none; min-height: 44px; padding: 0 14px 0 10px; font-
 .tbl td.num, .tbl th.num { text-align: right; }
 .tbl td.k { font-weight: 700; min-width: 8rem; }
 .tbl td.k small { display: block; font-weight: 500; color: var(--ink-3); }
-.tbl td.a { text-align: right; white-space: nowrap; }
-.tbl td.a .btn-row { justify-content: flex-end; flex-wrap: wrap; width: max-content; max-width: 21rem; margin-left: auto; }
+.tbl td.a { text-align: right; }
+.tbl td.num { white-space: nowrap; }
+.tbl td.a .btn-row { justify-content: flex-end; flex-wrap: wrap; }
 .tbl tr.inactive td:not(.a) { color: var(--ink-3); }
 @media (max-width: 767.98px) {
   .table-cards { display: block; }

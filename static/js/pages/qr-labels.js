@@ -19,13 +19,27 @@ if (!ui.config.qrLabels) {
 }
 
 /* ---------------------------------------------------------------------------------------------- state */
-const S = { batches: [], batch: null, sets: [], q: '', source: '' };
+const S = { batches: [], batch: null, sets: [], q: '', source: '', total: null };
 const limit = 120;
 const batchIdFromHash = () => { const m = /batch=([0-9a-f-]{36})/i.exec(location.hash); return m ? m[1] : null; };
 
-/** Batches for the picker. production page -> full list; otherwise what loading can see; otherwise batches that already have sets. */
+/**
+ * Batches for the picker. Preferred: GET /api/qr/batches?q=&limit= (works for label users without the production page, server-side search,
+ * shows labelled / unlabelled crates). Older servers answer 404 -> fallback: production page list -> loading availability -> batches that already have sets.
+ */
 const can = (pg) => ERP.me.is_admin || (ERP.me.allowed_pages || []).includes(pg);
+let qrListOk = true;                                    // flips to false (for the page's life) when the endpoint does not exist
 async function loadBatches() {
+  if (qrListOk) {
+    try {
+      const r = await api.get('/api/qr/batches', { q: S.q, limit });
+      const items = Array.isArray(r) ? r : (r && r.items) || [];
+      S.source = 'qr'; S.total = Array.isArray(r) ? items.length : (r && r.total) || items.length;
+      S.batches = items.map((b) => ({ id: b.id, batch_no: b.batch_no, product_name: b.product_name, qc_status: b.qc_status, crates: b.crates, expiry_date: b.expiry_date, ...(b.crates_per_pallet !== undefined ? { cpp: b.crates_per_pallet } : {}), location_name: b.location_name, allocated: b.allocated_crates, free: b.free_crates }));
+      return;
+    } catch (e) { if (e.status === 404 || e.status === 405) qrListOk = false; else throw e; }
+  }
+  S.total = null;
   if (can('production')) try { const r = await api.get('/api/production/batches', { limit }); S.source = 'production'; S.batches = (r.items || []).map((b) => ({ id: b.id, batch_no: b.batch_no, product_name: b.product_name, qc_status: b.qc_status, crates: b.crates, expiry_date: b.expiry_date, cpp: b.crates_per_pallet, produced_on: b.produced_on })); return; }
   catch (e) { if (e.status !== 403) throw e; }
   if (can('loading')) try {
@@ -39,7 +53,7 @@ async function loadBatches() {
 async function loadSets() { S.sets = S.batch ? await api.get(`/api/qr/batches/${encodeURIComponent(S.batch.id)}/sets`) : []; }
 
 /* ---------------------------------------------------------------------------------------------- layout */
-const searchIn = el('input.input', { type: 'search', placeholder: 'Search batch number or product', 'aria-label': 'Search batches', maxlength: 100, on: { input: ui.debounce(() => { S.q = searchIn.value.trim().toLowerCase(); paintPicker(); }, 200) } });
+const searchIn = el('input.input', { type: 'search', placeholder: 'Search batch number or product', 'aria-label': 'Search batches', maxlength: 100, on: { input: ui.debounce(async () => { S.q = searchIn.value.trim(); if (S.source === 'qr') { try { await loadBatches(); } catch (e) { ui.toastError(e); return; } } paintPicker(); }, 250) } });
 const pickerList = el('div.batch-list', { role: 'listbox', 'aria-label': 'Batches' });
 const picker = el('section.card', {}, el('div.card-head', {}, el('h2', {}, icon('package'), '1. Choose a batch')), el('div.searchbar', {}, icon('search', 'sm'), searchIn), pickerList);
 const panel = el('div.stack.loose');
@@ -50,15 +64,19 @@ ui.mount(main, headEl, root, printHost);
 ui.mount(pickerList, ui.skeletonCards(2));
 
 function paintPicker() {
-  const list = S.batches.filter((b) => !S.q || `${b.batch_no} ${b.product_name}`.toLowerCase().includes(S.q)).slice(0, 40);
+  const needle = S.q.toLowerCase();
+  const list = (S.source === 'qr' ? S.batches : S.batches.filter((b) => !needle || `${b.batch_no} ${b.product_name}`.toLowerCase().includes(needle))).slice(0, 60);
   if (!list.length) { ui.mount(pickerList, ui.empty({ icon: 'package', title: S.batches.length ? 'No batch matches' : 'No batches yet', text: S.batches.length ? 'Try another search.' : 'Batches appear here after Production creates them.' })); return; }
   ui.mount(pickerList, list.map((b) => el('button.batch-opt', { type: 'button', role: 'option', 'aria-selected': String(S.batch && S.batch.id === b.id), on: { click: () => select(b) } },
-    el('span.grow', {}, el('b', { text: b.batch_no }), el('span.small.muted', { text: `${b.product_name}${b.crates ? ` - ${crates(b.crates, b.cpp)}` : ''}` })), ui.badge(b.qc_status))));
+    el('span.grow', {}, el('b.nowrap', { text: b.batch_no }), el('span.small.muted', { text: `${b.product_name}${b.crates ? ` - ${crates(b.crates, b.cpp)}` : ''}` }),
+      b.free !== undefined && b.free !== null ? el('span.small', { class: b.free ? 'muted' : 'ok-text', text: b.free ? `${ui.fmtNum(b.free, 0)} without label` : 'All crates labelled' }) : null,
+      b.location_name && ERP.godown.multiple ? el('span.small.muted', { text: b.location_name }) : null), ui.badge(b.qc_status))));
+  if (S.source === 'qr' && S.total > list.length) pickerList.append(el('p.small.muted.center', { text: `Showing ${list.length} of ${ui.fmtNum(S.total, 0)} - type to search.` }));
 }
 async function select(b) {
   S.batch = b; history.replaceState(null, '', `#batch=${b.id}`); paintPicker();
   ui.mount(panel, ui.skeletonCards(2));
-  try { await loadSets(); if (b.crates === undefined) { const sh = await api.get(`/api/qr/batches/${encodeURIComponent(b.id)}/sheet`); b.crates = sh.batch.crates; b.cpp = sh.product.crates_per_pallet; b.expiry_date = sh.batch.expiry_date; b.qc_status = sh.batch.qc_status; } paintPanel(); setTimeout(() => panel.scrollIntoView({ block: 'start', behavior: 'smooth' }), 50); }
+  try { await loadSets(); if (b.crates === undefined || b.cpp === undefined) { const sh = await api.get(`/api/qr/batches/${encodeURIComponent(b.id)}/sheet`); b.crates = sh.batch.crates; b.cpp = sh.product.crates_per_pallet; b.expiry_date = sh.batch.expiry_date; b.qc_status = sh.batch.qc_status; } paintPanel(); setTimeout(() => panel.scrollIntoView({ block: 'start', behavior: 'smooth' }), 50); }
   catch (e) { if (!e.redirecting) ui.mount(panel, ui.errorState(e, () => select(b))); }
 }
 
