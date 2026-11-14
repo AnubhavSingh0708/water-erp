@@ -30,6 +30,7 @@
   .sheet { grid-template-columns: repeat(3, 1fr); gap: 0; }
   .sticker { grid-template-columns: 27mm 1fr; gap: 3mm; padding: 3mm; border: 1px dashed #666; border-radius: 0; height: 40mm; color: #000; }
   .st-label { font-size: 22pt; } .st-txt { font-size: 8pt; } .st-plant { color: #000; font-size: 7pt; }
+  body.print-thermal-mode .print-header { display: none !important; }
   .sheet.thermal { grid-template-columns: 1fr; }
   .sheet.thermal .sticker { width: 74mm; height: auto; page-break-after: always; break-after: page; border: 0; }
   .sheet.thermal .sticker:last-child { page-break-after: auto; break-after: auto; }
