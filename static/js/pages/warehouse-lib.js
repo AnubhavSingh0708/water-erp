@@ -190,6 +190,12 @@ export function explain(e) {
       trips.length ? el('ul', {}, trips.map((t) => el('li', { text: `${t.trip_no}: ${ui.fmtNum(t.crates, 0)} crates reserved` }))) : null,
       todo('What to do: open Loading, remove those crates from the trip (or finish the trip), then repeat this action. This cannot be overridden.'));
   }
+  if (e.code === 'OVER_PRODUCED') {
+    const left = d.produced !== undefined && d.on_record !== undefined ? Math.max(0, ui.toNum(d.produced) - ui.toNum(d.on_record)) : null;
+    return note(el('b', { text: 'A batch cannot hold more than it produced.' }),
+      d.produced !== undefined ? el('p.small', { text: `${d.batch_no ? `Batch ${d.batch_no}` : 'This batch'} produced ${ui.fmtNum(d.produced, 0)} crates and ${ui.fmtNum(d.on_record, 0)} are already on record${left !== null ? `, so at most ${ui.fmtNum(left, 0)} more can be added` : ''}${d.adding !== undefined ? ` (you tried to add ${ui.fmtNum(d.adding, 0)})` : ''}.` }) : null,
+      todo('What to do: check the batch number and the quantity. If crates are really missing from the books, correct the production batch record instead of adjusting stock.'));
+  }
   if (e.code === 'QC_LOCKED') return note('This batch has not been approved by Lab QC, so its stock is locked.', todo('What to do: wait for QC approval, or choose an approved batch.'));
   if (e.code === 'DUPLICATE') return e.hint ? null : note(el('p.small', { text: 'What to do: this has already been entered. Look for it in the list instead of entering it again, or void the earlier one first if it was wrong.' }));
   return null;
@@ -210,8 +216,9 @@ export function staleBanner(text = 'Someone else changed this while you were loo
 }
 
 /* ------------------------------------------------------------------------------------------------ dry run -> review -> confirmed submit */
+const TRANSIT_ID = '00000000-0000-0000-0000-000000000002';
 const zoneWithPlace = (e) => {
-  const place = (e.location_id && godown.list.length > 1) ? (godown.list.find((g) => g.id === e.location_id) || {}).name : '';
+  const place = e.location_id === TRANSIT_ID ? 'On the road' : (e.location_id && ((allLocs || []).length > 1 || godown.list.length > 1)) ? anyGodownName(e.location_id, '') : '';
   const z = e.zone === 'TRANSIT' ? 'In transit' : zoneLabel(e.zone);
   return [place, z].filter(Boolean).join(' / ');
 };
@@ -395,7 +402,7 @@ export function stockPicker({ locationId, zones, mode = 'existing', onChange, na
   [zoneF, itemF, lotF].forEach((f) => { f.input.dataset.nodraft = '1'; });
   const info = el('div.pick-info', { 'aria-live': 'polite' });
   const root = el('div.stack.tight.picker', {}, zoneF.el, itemF.el, lotF.el, info);
-  let items = []; let lots = []; let seq = 0; let adding = mode === 'adjust'; let hereLots = []; let candidates = []; let itemNote = '';
+  let items = []; let lots = []; let seq = 0; let adding = mode === 'adjust'; let keepLot = ''; let hereLots = []; let candidates = []; let itemNote = '';
   const fire = () => { if (onChange) onChange(get()); };
   const itemKey = (x) => `${x.item_type}:${x.item_id}`;
   function setOptions(f, options, value) {
@@ -461,7 +468,7 @@ export function stockPicker({ locationId, zones, mode = 'existing', onChange, na
   }
   function buildLots() {
     const it = items.find((x) => itemKey(x) === itemF.get()); const zone = zoneF.get(); if (!it) return;
-    const prev = lotF.get();
+    const prev = keepLot || lotF.get(); keepLot = '';
     lots = [...hereLots]; if (mode === 'adjust' && adding) lots.push(...candidates);
     const opts = lots.map((l) => ({ value: l.lot_id || 'none', label: lotLabel(l, it) }));
     const jarNil = it.item_type === 'PRODUCT' && (zone === 'JAR_EMPTY' || zone === 'JAR_CLEAN');
@@ -514,7 +521,7 @@ export function stockPicker({ locationId, zones, mode = 'existing', onChange, na
   lotF.input.addEventListener('change', () => { lotF.setError(''); paint(); fire(); });
   loadItems();
   const setAdding = (v) => { v = !!v; if (v === adding) return; adding = v; if (itemF.get()) { buildLots(); paint(); fire(); } };
-  return { el: root, get, reload: loadItems, setAdding, flagMissing, zoneInput: zoneF.input, fields: { zoneF, itemF, lotF } };
+  return { el: root, get, reload: loadItems, refreshLots: () => { keepLot = lotF.get(); return loadLots(); }, setAdding, flagMissing, zoneInput: zoneF.input, fields: { zoneF, itemF, lotF } };
 }
 
 /* ------------------------------------------------------------------------------------------------ mini bar chart (CSS only) */

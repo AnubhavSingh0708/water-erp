@@ -38,7 +38,7 @@ function mountStock(panel) {
   const host = el('div');
   panel.append(
     el('div.toolbar', {}, el('div.searchbar', {}, icon('search'), search), el('div.toolbar-end', {}, csv)),
-    el('div.filters', {}, cat.el, el('label.check.bare', {}, low, el('span', { text: 'Only low / out of stock' }))),
+    el('div.filters.two', {}, cat.el, el('label.check.bare', {}, low, el('span', { text: 'Only low / out of stock' }))),
     host);
   const run = ui.debounce(() => { st.q = search.value.trim(); load(); }, 350);
   search.addEventListener('input', run);
@@ -51,7 +51,7 @@ function mountStock(panel) {
       return ui.cardsTable({
         columns: [
           { label: 'Material', cls: 'k', render: (m) => [el('b', { text: m.name }), el('small', { text: `${m.code} - ${L.CATEGORY_LABEL[m.category] || m.category}` })] },
-          { label: 'Status', cls: 's', render: (m) => [m.category === 'EMPTY_BOTTLE' ? ui.badge('INFO', 'Made in-house', 'info') : ui.badge(m.status), m.open_reorder ? el('div', { style: { marginTop: '4px', textAlign: 'right' } }, el('span.chip-s.info', {}, icon('clipboard', 'sm'), 'Reorder open')) : null] },
+          { label: 'Status', cls: 's', render: (m) => [m.category === 'EMPTY_BOTTLE' ? ui.badge('INFO', 'In-house', 'info') : ui.badge(m.status), m.open_reorder ? el('div', { style: { marginTop: '4px', textAlign: 'right' } }, el('span.chip-s.info', {}, icon('clipboard', 'sm'), 'Reorder open')) : null] },
           { label: 'In raw store', cls: 'num', render: (m) => (m.category === 'EMPTY_BOTTLE' ? el('span', {}, L.qty(m.stock_total, m.stock_unit), el('small.block.muted', { text: 'on the blow floor' })) : L.qty(m.stock_rm_store, m.stock_unit)) },
           { label: 'Days of cover', cls: 'num', render: (m) => (m.category !== 'EMPTY_BOTTLE' && m.days_cover ? `${ui.fmtNum(m.days_cover, 1)} days` : '-') },
           { label: 'Used per day', cls: 'num', hideMobile: true, render: (m) => (ui.toNum(m.avg_daily_burn) > 0 ? L.qty(m.avg_daily_burn, m.stock_unit, 1) : '-') },
@@ -167,8 +167,8 @@ const hashId = (location.hash || '').slice(1);
 const tabs = L.tabbed(main, [
   { id: 'stock', label: 'Stock', icon: 'box', render: mountStock },
   { id: 'reorder', label: 'Reorder', icon: 'clipboard', render: mountReorder },
-  { id: 'po', label: 'Purchase orders', icon: 'list', render: (p) => mountPo(p, ctx) },
-  { id: 'grn', label: 'Receive goods', icon: 'download', render: (p) => mountGrn(p, ctx, 'grn') },
+  { id: 'po', label: 'Orders', icon: 'list', render: (p) => mountPo(p, ctx) },
+  { id: 'grn', label: 'Receive', icon: 'download', render: (p) => mountGrn(p, ctx, 'grn') },
   { id: 'returns', label: 'Returns', icon: 'arrow-right', render: (p) => mountGrn(p, ctx, 'returns') },
 ], { initial: hashId === 'reorders' ? 'reorder' : (ids.includes(hashId) ? hashId : 'stock') });
 // reorder badge even before the tab is opened

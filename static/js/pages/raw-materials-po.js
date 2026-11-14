@@ -14,7 +14,7 @@ export function mountPo(panel, ctx) {
   let inForm = false;
 
   function showList() {
-    inForm = false;
+    inForm = false; L.clearSub();
     const seg = ui.segmented({ options: STATUS_FILTERS, value: status, label: 'Purchase order status', onChange: (v) => { status = v; load(); } });
     const listHost = el('div');
     ui.mount(host, el('div.page-head', {}, el('div.seg-row', {}, seg.el), el('div.actions', {}, L.btn('New purchase order', 'plus', { onClick: () => showForm() }))), listHost);
@@ -71,7 +71,7 @@ export function mountPo(panel, ctx) {
 
   /* ----------------------------------------------------------------------------------------- form */
   async function showForm(prefill = {}) {
-    inForm = true; L.toTop();
+    inForm = true; L.enterSub(() => { inForm = false; showList(); }); L.toTop();
     ui.mount(host, ui.skeletonCards(2));
     let materials, suppliers;
     try { [materials, suppliers] = await Promise.all([L.refMaterials(), L.refSuppliers()]); } catch (e) { ui.mount(host, ui.errorState(e, () => showForm(prefill))); return; }
