@@ -8,7 +8,7 @@ const { el, icon } = ui;
 let stockEndpoint = 'unknown';   // 'unknown' | 'yes' | 'no'
 
 export function mountBlow(panel, ctx) {
-  const histHost = el('div'); let offset = 0;
+  const histHost = el('div.compact'); let offset = 0;
   const holder = el('div.stack'); panel.append(holder);
   let products = [], materials = [], equipment = [];
 
@@ -29,8 +29,8 @@ export function mountBlow(panel, ctx) {
     const shift = ui.field({ label: 'Shift', name: 'shift', type: 'select', options: L.optionsOf(L.SHIFTS), value: hour >= 19 || hour < 6 ? 'NIGHT' : 'DAY' });
     const eq = ui.field({ label: 'Machine', name: 'equipment_id', type: 'select', optional: true, options: [{ value: '', label: 'Not specified' }, ...equipment.map((e) => ({ value: e.id, label: e.name }))] });
     const date = ui.field({ label: 'Run date', name: 'run_date', type: 'date', value: ui.todayPlant() }); date.input.max = ui.todayPlant(); date.input.min = L.todayMinus(31);
-    const issued = L.unitInput({ name: 'preforms_issued', label: 'Preforms issued to the machine', unit: 'pcs', inputmode: 'numeric', required: true });
-    const good = L.unitInput({ name: 'good_bottles', label: 'Good bottles produced', unit: 'pcs', inputmode: 'numeric', required: true });
+    const issued = L.unitInput({ name: 'preforms_issued', label: 'Preforms issued to the machine', unit: 'pcs', inputmode: 'numeric', placeholder: 'e.g. 8000', required: true });
+    const good = L.unitInput({ name: 'good_bottles', label: 'Good bottles produced', unit: 'pcs', inputmode: 'numeric', placeholder: 'e.g. 7900', required: true });
     const scrapBox = el('div.echo', { 'aria-live': 'polite' });
     const avail = el('div.avail', { 'aria-live': 'polite', hidden: true });
     const notes = ui.field({ label: 'Note', name: 'notes', type: 'textarea', optional: true, rows: 2, maxlength: 500 });
@@ -61,7 +61,7 @@ export function mountBlow(panel, ctx) {
     }
     async function checkStock({ force = false } = {}) {
       const site = ctx.site(); const pre = preSel.get();
-      if (stockEndpoint === 'no' || !site || !pre) { stock = null; paintStock(); return; }
+      if (stockEndpoint === 'no' || !site || !pre || !prod.get()) { stock = null; paintStock(); return; }
       if (!force && stock && !stock.error && stock.material_id === pre && stock.location_id === site.id && Date.now() - stockAt < 20000) { paintStock(); return; }
       const my = ++stockSeq;
       try {

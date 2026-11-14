@@ -489,12 +489,18 @@ export function stockPicker({ locationId, zones, mode = 'existing', onChange, na
     if (g.expiry_date) { const d = daysBetween(g.expiry_date); parts.push(el('span.chip-s', { class: d < 0 ? 'bad' : d <= 30 ? 'warn' : '', text: d < 0 ? `Expired ${ui.fmtDate(g.expiry_date)}` : `Expires ${ui.fmtDate(g.expiry_date)}` })); }
     info.append(...parts);
   }
-  zoneF.input.addEventListener('change', loadItems);
-  itemF.input.addEventListener('change', loadLots);
-  lotF.input.addEventListener('change', () => { paint(); fire(); });
+  /** Point at what is missing (item or lot) right on the control instead of a banner somewhere else. Returns true when complete. */
+  function flagMissing() {
+    if (get()) return true;
+    if (!itemF.get()) itemF.setError('Choose the item'); else lotF.setError(lotF.input.options.length > 1 || lotF.get() === '' ? 'Choose the lot / batch' : 'No lot to use here');
+    return false;
+  }
+  zoneF.input.addEventListener('change', () => { itemF.setError(''); lotF.setError(''); loadItems(); });
+  itemF.input.addEventListener('change', () => { itemF.setError(''); lotF.setError(''); loadLots(); });
+  lotF.input.addEventListener('change', () => { lotF.setError(''); paint(); fire(); });
   loadItems();
   const setAdding = (v) => { v = !!v; if (v === adding) return; adding = v; if (itemF.get()) { buildLots(); paint(); fire(); } };
-  return { el: root, get, reload: loadItems, setAdding, zoneInput: zoneF.input, fields: { zoneF, itemF, lotF } };
+  return { el: root, get, reload: loadItems, setAdding, flagMissing, zoneInput: zoneF.input, fields: { zoneF, itemF, lotF } };
 }
 
 /* ------------------------------------------------------------------------------------------------ mini bar chart (CSS only) */

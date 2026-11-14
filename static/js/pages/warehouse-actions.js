@@ -31,8 +31,8 @@ export function mountActions(panel, ctx) {
   }
   async function loadLists() {
     if (!listsHost) return;
-    const woHost = el('div'); const cntHost = el('div');
-    ui.mount(listsHost, el('div.row.between', {}, el('h2', { text: 'Stock counts' })), cntHost, el('div.row.between', {}, el('h2', { text: 'Write-offs' }), (() => { const b = L.btn('CSV', 'download', { kind: 'secondary', sm: true, onClick: () => L.guarded(b, () => api.download('/api/warehouse/write-offs', { query: { format: 'csv', ...L.readParam() } })) }); return b; })()), woHost);
+    const woHost = el('div.compact'); const cntHost = el('div.compact');
+    ui.mount(listsHost, el('div.row.between.lists-head', {}, el('h2', { text: 'Stock counts' })), cntHost, el('div.row.between.lists-head', {}, el('h2', { text: 'Write-offs' }), (() => { const b = L.btn('CSV', 'download', { kind: 'secondary', sm: true, onClick: () => L.guarded(b, () => api.download('/api/warehouse/write-offs', { query: { format: 'csv', ...L.readParam() } })) }); return b; })()), woHost);
     const run = async (h, fn) => L.refreshInto(h, fn);
     await Promise.all([
       run(cntHost, async () => {
@@ -85,11 +85,11 @@ export function mountActions(panel, ctx) {
     form.addEventListener('submit', async (ev) => {
       ev.preventDefault(); ui.clearFormError(form);
       const g = picker.get(); let bad = false;
-      if (!g) { ui.formError(form, { status: 422, message: 'Choose the zone, item and lot first.', fields: {} }); return; }
-      const p = L.qtyProblem(q.get(), { whole: g.whole }); q.setError(p); if (p) bad = true;
+      if (!g) { picker.flagMissing(); bad = true; }
+      const p = L.qtyProblem(q.get(), { whole: g ? g.whole : false }); q.setError(p); if (p) bad = true;
       const n = L.dec(q.get());
-      if (!p && dir.value === 'remove' && n > ui.toNum(g.have)) { q.setError(`Only ${ui.fmtNum(g.have, 4)} ${g.unit} on hand`); bad = true; }
-      if (!p && dir.value === 'remove' && ui.toNum(g.reserved) > 0 && ui.toNum(g.have) - n < ui.toNum(g.reserved)) { q.setError(`${ui.fmtNum(g.reserved, 0)} crates are held for loading trips - only ${ui.fmtNum(g.free, 0)} are free to remove`); bad = true; }
+      if (g && !p && dir.value === 'remove' && n > ui.toNum(g.have)) { q.setError(`Only ${ui.fmtNum(g.have, 4)} ${g.unit} on hand`); bad = true; }
+      if (g && !p && dir.value === 'remove' && ui.toNum(g.reserved) > 0 && ui.toNum(g.have) - n < ui.toNum(g.reserved)) { q.setError(`${ui.fmtNum(g.reserved, 0)} crates are held for loading trips - only ${ui.fmtNum(g.free, 0)} are free to remove`); bad = true; }
       if (!code.get()) { code.setError('Choose a reason'); bad = true; } else code.setError('');
       if (reason.get().trim().length < 5) { reason.setError('Please explain (at least 5 letters)'); bad = true; } else reason.setError('');
       if (bad) { form.querySelector('.has-error input, .has-error select, .has-error textarea')?.focus(); return; }
@@ -121,8 +121,8 @@ export function mountActions(panel, ctx) {
     q.input.addEventListener('input', upd);
     form.addEventListener('submit', async (ev) => {
       ev.preventDefault(); ui.clearFormError(form);
-      const g = picker.get(); if (!g) { ui.formError(form, { status: 422, message: 'Choose the zone, item and lot first.', fields: {} }); return; }
-      let bad = false; const p = L.qtyProblem(q.get(), { whole: g.whole, max: ui.toNum(g.free) }); q.setError(p); if (p) bad = true;
+      const g = picker.get(); let bad = false; if (!g) { picker.flagMissing(); bad = true; }
+      const p = L.qtyProblem(q.get(), { whole: g ? g.whole : false, max: g ? ui.toNum(g.free) : undefined }); q.setError(p); if (p) bad = true;
       if (!to.get()) { to.setError('Choose where the stock goes'); bad = true; } else to.setError('');
       if (to.get() === 'SCRAP_YARD' && note.get().trim().length < 5) { note.setError('Say why it goes to scrap (at least 5 letters)'); bad = true; } else note.setError('');
       if (bad) { form.querySelector('.has-error input, .has-error select, .has-error textarea')?.focus(); return; }
@@ -163,8 +163,8 @@ export function mountActions(panel, ctx) {
     q.input.addEventListener('input', upd);
     form.addEventListener('submit', async (ev) => {
       ev.preventDefault(); ui.clearFormError(form);
-      const g = picker.get(); if (!g) { ui.formError(form, { status: 422, message: 'Choose the zone, item and lot first.', fields: {} }); return; }
-      let bad = false; const p = L.qtyProblem(q.get(), { whole: g.whole, max: ui.toNum(g.free) }); q.setError(p); if (p) bad = true;
+      const g = picker.get(); let bad = false; if (!g) { picker.flagMissing(); bad = true; }
+      const p = L.qtyProblem(q.get(), { whole: g ? g.whole : false, max: g ? ui.toNum(g.free) : undefined }); q.setError(p); if (p) bad = true;
       if (!code.get()) { code.setError('Choose a reason'); bad = true; } else code.setError('');
       if (note.get().trim().length < 5) { note.setError('Please explain (at least 5 letters)'); bad = true; } else note.setError('');
       if (bad) { form.querySelector('.has-error input, .has-error select, .has-error textarea')?.focus(); return; }
@@ -213,7 +213,7 @@ export function mountActions(panel, ctx) {
       const nt = el('input.input', { type: 'text', name: 'line_note', maxlength: 300, 'aria-label': `Note for ${l.name}`, placeholder: 'Why is it different?', value: l.note || '' });
       const ntWrap = el('div.field', { hidden: true }, el('label', { text: 'Note for the difference' }), nt, el('p.error'));
       const chipHost = el('div.chip-row');
-      const card = el('div.line-card.count-line', { dataset: { name: l.name.toLowerCase() } }, el('div.row.between', { style: { flexWrap: 'nowrap', alignItems: 'flex-start' } }, el('div', {}, el('b', { text: l.name }), el('div.small.muted', { text: l.lot_label || '' })), el('div.right', {}, el('div.small.muted', { text: 'System' }), el('b', { text: `${ui.fmtNum(l.expected_qty, 4)} ${l.unit}` }))),
+      const card = el('div.line-card.count-line', { dataset: { name: l.name.toLowerCase() } }, el('div.row.between', { style: { flexWrap: 'nowrap', alignItems: 'flex-start' } }, el('div', {}, el('b', { text: l.name }), el('div.small.muted', { text: l.lot_label || '' })), el('div.right', {}, el('div.small.muted', { text: 'System' }), el('b.nowrap', { text: `${ui.fmtNum(l.expected_qty, 4)} ${l.unit}` }))),
         el('div.count-input', {}, inp, same), chipHost, ntWrap);
       const row = { l, inp, nt, ntWrap, card, whole, problem: '', large: false,
         calc() {
