@@ -89,7 +89,7 @@ async function openTransfer(id, pre) {
 async function cancelTransfer(t, button) {
   const reason = await ui.promptDialog({ title: `Cancel ${t.tf_no}?`, label: 'Why is it cancelled?', help: `All goods go back to ${t.from_name}. Use this only if the goods never left or are being brought back.`, min: 5, max: 300, confirmText: 'Review cancellation', danger: true });
   if (!reason) return;
-  const r = await L.dialogFlow({ flow: L.makeFlow(), button, path: `/api/godowns/transfers/${t.id}/cancel`, body: { reason }, title: `Cancel ${t.tf_no}`, confirmText: 'Cancel and return the goods', danger: true, summary: `The goods go back into ${t.from_name}.` });
+  const r = await L.dialogFlow({ flow: L.makeFlow(), button, path: `/api/godowns/transfers/${t.id}/cancel`, body: { reason }, title: `Cancel ${t.tf_no}`, confirmText: 'Cancel and return the goods', danger: true, sendConfirm: 'always', summary: `The goods go back into ${t.from_name}.` });
   if (r) { ui.toast.ok(`${t.tf_no} cancelled`); openTransfer(t.id, r); }
 }
 

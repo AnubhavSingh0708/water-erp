@@ -145,25 +145,26 @@ export function explain(e) {
   if (!e || !e.code) return null;
   const d = e.details || {};
   const note = (...kids) => el('div.explain', {}, ...kids);
+  const todo = (t) => (e.hint ? null : el('p.small', { text: t }));
   if (e.code === 'INSUFFICIENT_STOCK') {
     if (Array.isArray(d.shortages) && d.shortages.length) {
       return note(el('b', { text: 'Not enough stock for:' }), el('ul', {}, d.shortages.map((s) => el('li', {}, el('b', { text: s.name }),
         ` - needs ${ui.fmtNum(s.required, 4)}, only ${ui.fmtNum(s.available, 4)} available${s.zone ? ` in ${zoneLabel(s.zone)}` : ''}.`))),
-      el('p.small', { text: 'What to do: receive more stock (Raw materials > Receive), make the batch smaller, or ask the store to move stock into the right zone.' }));
+      todo('What to do: receive more stock (Raw materials > Receive), make the batch smaller, or ask the store to move stock into the right zone.'));
     }
     if (d.available !== undefined) {
       return note(`Only ${ui.fmtNum(d.available, 4)} available${d.zone ? ` in ${zoneLabel(d.zone)}` : ''} but ${ui.fmtNum(d.required, 4)} is needed.`,
-        el('p.small', { text: 'What to do: lower the quantity, pick another lot, or check the stock page for where the goods really are.' }));
+        todo('What to do: lower the quantity, pick another lot, or check the stock page for where the goods really are.'));
     }
   }
   if (e.code === 'RESERVED_STOCK') {
     const trips = Array.isArray(d.trips) ? d.trips : [];
     return note(el('b', { text: 'These crates are held for loading.' }),
       trips.length ? el('ul', {}, trips.map((t) => el('li', { text: `${t.trip_no}: ${ui.fmtNum(t.crates, 0)} crates reserved` }))) : null,
-      el('p.small', { text: 'What to do: open Loading, remove those crates from the trip (or finish the trip), then repeat this action. This cannot be overridden.' }));
+      todo('What to do: open Loading, remove those crates from the trip (or finish the trip), then repeat this action. This cannot be overridden.'));
   }
-  if (e.code === 'QC_LOCKED') return note('This batch has not been approved by Lab QC, so its stock is locked.', el('p.small', { text: 'What to do: wait for QC approval, or choose an approved batch.' }));
-  if (e.code === 'DUPLICATE') return note(el('p.small', { text: 'What to do: this has already been entered. Look for it in the list instead of entering it again, or void the earlier one first if it was wrong.' }));
+  if (e.code === 'QC_LOCKED') return note('This batch has not been approved by Lab QC, so its stock is locked.', todo('What to do: wait for QC approval, or choose an approved batch.'));
+  if (e.code === 'DUPLICATE') return e.hint ? null : note(el('p.small', { text: 'What to do: this has already been entered. Look for it in the list instead of entering it again, or void the earlier one first if it was wrong.' }));
   return null;
 }
 /** formError + plain-language explanation block; INVALID_STATE calls onStale (re-fetch + "changed by someone else"). */
@@ -214,7 +215,7 @@ export async function submitDocument({ flow, form, button, path, body, title, co
       if (!ok) return null;
       warnings = d.warnings || [];
     }
-    const payload = sendConfirm && (warnings.length || flow.retrySig === sig) ? { ...body, confirm: true } : body;
+    const payload = sendConfirm && (sendConfirm === 'always' || warnings.length || flow.retrySig === sig) ? { ...body, confirm: true } : body;
     const call = () => (method === 'put' ? flow.act.put(path, payload) : flow.act.postConfirm(path, payload));
     try {
       const res = await api.busy(button, call);
@@ -513,7 +514,7 @@ export async function dialogFlow({ flow, button, path, body, title, confirmText,
       if (!ok) return null;
       warnings = d.warnings || [];
     }
-    const payload = sendConfirm && (warnings.length || flow.retrySig === sig) ? { ...body, confirm: true } : body;
+    const payload = sendConfirm && (sendConfirm === 'always' || warnings.length || flow.retrySig === sig) ? { ...body, confirm: true } : body;
     try { const r = await api.busy(button, () => flow.act.postConfirm(path, payload)); flow.retrySig = null; return r; }
     catch (e) { if (e && e.network) flow.retrySig = sig; throw e; }
   } catch (e) { errorDialog(e, 'Not saved'); return null; }
