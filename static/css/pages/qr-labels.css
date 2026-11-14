@@ -1,0 +1,35 @@
+/* qr-labels.html */
+.qr-layout > *, .qr-layout .stack > * { min-width: 0; }
+.qr-layout { display: grid; gap: var(--s4); align-items: start; }
+@media (min-width: 1024px) { .qr-layout { grid-template-columns: minmax(18rem, 24rem) minmax(0, 1fr); } .qr-layout > .card:first-child { position: sticky; top: calc(var(--appbar-h) + var(--s4)); } }
+.batch-list { display: grid; gap: 6px; margin-top: var(--s3); max-height: 60vh; overflow-y: auto; }
+.batch-opt { display: flex; align-items: center; gap: var(--s3); min-height: 56px; padding: var(--s2) var(--s3); border: 1.5px solid var(--line); border-radius: var(--r); background: var(--surface); text-align: left; cursor: pointer; }
+.batch-opt:hover { border-color: var(--line-strong); }
+.batch-opt[aria-selected="true"] { border-color: var(--brand-600); background: var(--brand-50); }
+.batch-opt b { display: block; }
+.big { font-size: 1.15rem; font-weight: 800; }
+.ok-text { color: var(--ok); font-weight: 700; }
+.chk { display: flex; align-items: flex-start; gap: 6px; font-weight: 700; font-size: var(--fs-sm); }
+.chk.ok { color: var(--ok); } .chk.bad { color: var(--bad); }
+.qr-preview { display: grid; gap: var(--s2); min-height: 3rem; }
+.chip-sm { display: inline-block; padding: 2px 10px; border-radius: var(--r-pill); background: var(--brand-50); border: 1px solid var(--brand-100); color: var(--brand-800); font-weight: 700; font-size: .85rem; }
+.back { align-self: flex-start; }
+/* sticker sheet */
+.sheet { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: var(--s3); }
+.sticker { display: grid; grid-template-columns: 7.5rem 1fr; gap: var(--s3); align-items: center; padding: var(--s3); background: #fff; border: 1.5px dashed var(--line-strong); border-radius: var(--r-sm); break-inside: avoid; }
+.st-qr svg { width: 100%; height: auto; display: block; }
+.st-txt { display: grid; gap: 1px; font-size: .85rem; line-height: 1.25; min-width: 0; }
+.st-label { font-size: 2rem; line-height: 1; }
+.st-prod { font-weight: 700; }
+.st-code { font-weight: 800; letter-spacing: .06em; }
+.st-plant { color: var(--ink-3); font-size: .75rem; }
+@page thermal { size: 80mm auto; margin: 2mm; }
+@media print {
+  .back, .batch-list, .qr-layout { }
+  .sheet { grid-template-columns: repeat(3, 1fr); gap: 0; }
+  .sticker { grid-template-columns: 27mm 1fr; gap: 3mm; padding: 3mm; border: 1px dashed #666; border-radius: 0; height: 40mm; color: #000; }
+  .st-label { font-size: 22pt; } .st-txt { font-size: 8pt; } .st-plant { color: #000; font-size: 7pt; }
+  .sheet.thermal { grid-template-columns: 1fr; page: thermal; }
+  .sheet.thermal .sticker { width: 74mm; height: auto; page-break-after: always; break-after: page; border: 0; }
+  .sheet.thermal .sticker:last-child { page-break-after: auto; break-after: auto; }
+}
