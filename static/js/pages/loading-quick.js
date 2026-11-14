@@ -107,7 +107,7 @@ export function createQuickAdd({ tripId, getTrip, getAvail, onAdded }) {
       if (!ref) { ref = build(p); rows.set(p.id, ref); }
       ref.p = p;
       const max = Math.min(p.free, room()); ref.max = max;
-      ref.q.setMax(max);
+      if (ref.q.setMax) ref.q.setMax(max);   // (older cached ui.js without setMax: the check() below still blocks over-limit entries)
       ui.mount(ref.free, 'Free to add: ', el('b', {}, cratesNode(p.free, p.cpp)), p.batches.length > 1 ? ` in ${p.batches.length} batches` : '');
       ref.allBtn.textContent = max < p.free ? `Fill vehicle (${ui.fmtNum(max, 0)})` : `All free (${ui.fmtNum(max, 0)})`;
       ref.allBtn.hidden = max <= 0;

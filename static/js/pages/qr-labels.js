@@ -122,7 +122,7 @@ function generateCard(rem) {
     if (p.err) { preview.append(el('span.muted.small', { text: p.err })); return; }
     const sum = p.sizes.reduce((s, x) => s + x, 0); const over = sum > rem;
     const groups = []; p.sizes.forEach((x) => { const g = groups[groups.length - 1]; if (g && g.n === x) g.k++; else groups.push({ n: x, k: 1 }); });
-    preview.append(el('div.chk', { class: over ? 'bad' : 'ok' }, icon(over ? 'alert' : 'check-circle', 'sm'), over ? ` ${sum} crates is more than the ${rem} unlabelled - remove ${sum - rem}.` : ` ${p.sizes.length} stickers, ${sum} of ${rem} unlabelled crates covered${sum < rem ? ` (${rem - sum} stay unlabelled)` : ''}.`),
+    preview.append(el('div.chk', { class: over ? 'bad' : 'ok' }, icon(over ? 'alert' : 'check-circle', 'sm'), over ? ` ${sum} crates is more than the ${rem} unlabelled - remove ${sum - rem}.` : ` ${p.sizes.length} ${p.sizes.length === 1 ? 'sticker' : 'stickers'}, ${sum} of ${rem} unlabelled crates covered${sum < rem ? ` (${rem - sum} stay unlabelled)` : ''}.`),
       el('div.chips', {}, groups.slice(0, 12).map((g) => el('span.chip-sm', { text: `${g.k} x ${g.n}` })), groups.length > 12 ? el('span.chip-sm', { text: '...' }) : null));
   }
   [size.input, count.input, custom.input].forEach((i) => i.addEventListener('input', paintPreview));
@@ -147,10 +147,9 @@ function setsCard() {
     el('div', { style: { padding: '0 var(--s4) var(--s4)' } }, ui.cardsTable({ columns: [
       { label: 'Label', cls: 'k', render: (s) => [el('b', { text: s.set_label }), el('small', { text: s.code })] },
       { label: 'Status', cls: 's', render: (s) => ui.badge(s.status) },
-      { label: 'Crates', cls: 'num', render: (s) => cratesNode(s.crates, S.batch.cpp || (s.pallets !== null && s.pallets !== undefined && s.pallets > 0 ? Math.round(s.crates / s.pallets) : 0)) },
-      { label: 'Trip', render: (s) => s.trip_no || '-' },
-      { label: '', cls: 'a', render: (s) => el('div.btn-row', {}, el('button.btn.secondary.sm', { type: 'button', on: { click: () => printView([s.id]) } }, icon('print', 'sm'), 'Print'),
-        !s.parent_set_id && ['QUARANTINE', 'AVAILABLE'].includes(s.status) ? el('button.btn.danger.outline.sm', { type: 'button', on: { click: () => del(s) } }, icon('trash', 'sm'), 'Delete') : null) },
+      { label: 'Crates', cls: 'num', render: (s) => [cratesNode(s.crates, S.batch.cpp || (s.pallets !== null && s.pallets !== undefined && s.pallets > 0 ? Math.round(s.crates / s.pallets) : 0)), s.trip_no ? el('small.muted.nowrap', { style: { display: 'block' }, text: s.trip_no }) : null] },
+      { label: '', cls: 'a', render: (s) => el('div.btn-row', {}, el('button.btn.secondary.sm.compact', { type: 'button', 'aria-label': `Print label ${s.set_label}`, on: { click: () => printView([s.id]) } }, icon('print', 'sm'), el('span.btn-text', { text: 'Print' })),
+        !s.parent_set_id && ['QUARANTINE', 'AVAILABLE'].includes(s.status) ? el('button.btn.danger.outline.sm.compact', { type: 'button', 'aria-label': `Delete label ${s.set_label}`, on: { click: () => del(s) } }, icon('trash', 'sm'), el('span.btn-text', { text: 'Delete' })) : null) },
     ], rows: sets, emptyState: { icon: 'qr', title: 'No labels for this batch yet', text: 'Create them above, then print and stick them on the pallets.' } })));
 }
 async function del(s) {

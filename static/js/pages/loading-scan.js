@@ -115,7 +115,7 @@ export function openScanner({ trip, ctx, code, onAdded, refresh, onClose }) {
   }
   function showSet(set) {
     paused = true; frame.classList.add('compact');
-    const q = ui.qtyInput({ name: 'qrcrates', label: 'Crates to load from this label', cratesPerPallet: set.crates_per_pallet || 0, max: set.crates, value: String(set.crates), min: 1 });
+    const q = ui.qtyInput({ name: 'qrcrates', label: 'Crates to load from this label', cratesPerPallet: set.crates_per_pallet || 0, unit: 'crates', max: set.crates, value: String(set.crates), min: 1 });
     const split = el('div.small.muted'); const upd = () => { const n = q.value; ui.clear(split); if (n && n < set.crates) split.append(`Partial: ${crates(set.crates - n, set.crates_per_pallet)} stay on a new label that you can print.`); };
     q.input.addEventListener('input', upd);
     const add = el('button.btn.primary', { type: 'button', disabled: !set.loadable, on: { click: addIt } }, el('span.btn-icon', {}, icon('plus')), 'Add to trip');

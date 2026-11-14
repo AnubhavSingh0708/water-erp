@@ -40,6 +40,13 @@ export function svgNode(markup) {
     root.querySelectorAll('script, foreignObject, iframe, object, embed').forEach((n) => n.remove());
     const walk = (n) => { for (const a of [...(n.attributes || [])]) if (/^on/i.test(a.name) || /javascript:/i.test(a.value)) n.removeAttribute(a.name); [...n.children].forEach(walk); };
     walk(root);
+    // The server SVG has fixed width/height but no viewBox: scaled by CSS it would be CROPPED (unscannable label). Add the viewBox, let CSS size it.
+    if (!root.getAttribute('viewBox')) {
+      const w = parseFloat(root.getAttribute('width')), h = parseFloat(root.getAttribute('height'));
+      if (w > 0 && h > 0) root.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    }
+    root.removeAttribute('width'); root.removeAttribute('height');
+    root.setAttribute('role', 'img'); root.setAttribute('aria-label', 'QR code');
     return document.importNode(root, true);
   } catch { return null; }
 }
