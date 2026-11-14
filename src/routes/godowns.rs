@@ -247,6 +247,17 @@ pub async fn receive(State(s): State<AppState>, user: AuthUser, Id(id): Id, Q(dq
         if short > Decimal::ZERO {
             stock::post_all(&mut tx, vec![Move::new(it, item, zone, lot, -short, "TRANSFER_SHORT").at(TRANSIT_LOCATION).reference("GODOWN_TRANSFER", id).by(Some(user.id)).note(format!("{tf_no}: {}", notes[i]))]).await?;
         }
+        // containers destroyed / lost on the way leave the fleet: one DESTROYED event per cause (same transaction)
+        if it == ItemType::Product && matches!(zone, "JAR_EMPTY" | "JAR_CLEAN") {
+            let place = if zone == "JAR_EMPTY" { "PLANT_EMPTY" } else { "PLANT_CLEAN" };
+            for (qty, reason) in [(dmg, "DAMAGED_RETURN"), (short, "LOST")] {
+                if qty > Decimal::ZERO {
+                    let q = qty.trunc().to_string().parse::<i32>().map_err(|_| AppError::bad("quantity out of range"))?;
+                    sqlx::query("INSERT INTO jar_fleet_events (product_id, event_type, qty, reason_code, location, note, created_by, location_id) VALUES ($1,'DESTROYED',$2,$3,$4,$5,$6,$7)")
+                        .bind(item).bind(q).bind(reason).bind(place).bind(format!("godown transfer {tf_no}")).bind(user.id).bind(to).execute(&mut *tx).await?;
+                }
+            }
+        }
         sqlx::query("UPDATE godown_transfer_lines SET qty_received=$2, qty_damaged=$3, note=$4 WHERE id=$1").bind(lid).bind(rec).bind(dmg).bind(&notes[i]).execute(&mut *tx).await?;
     }
     sqlx::query("UPDATE godown_transfers SET status='RECEIVED', received_by=$2, received_at=now() WHERE id=$1").bind(id).bind(user.id).execute(&mut *tx).await?;

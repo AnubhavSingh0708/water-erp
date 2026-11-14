@@ -105,6 +105,8 @@ fn insufficient(c: &ItemCtx, zone: &str, lot: Uuid, have: Decimal, need: Decimal
         json!({ "item_type": c.kind.it().as_str(), "item_id": c.id, "zone": zone, "lot_id": lot, "available": have, "required": need }))
 }
 
+fn is_jar_zone(zone: &str) -> bool { matches!(zone, "JAR_EMPTY" | "JAR_CLEAN") }
+
 /// Containers leaving the fleet through a warehouse flow need a DESTROYED event (API §0.2-E).
 async fn fleet_destroyed(tx: &mut PgConnection, loc: Uuid, c: &ItemCtx, from_zone: &str, qty: Decimal, reason: &str, note: &str, user: &AuthUser) -> AppResult<()> {
     if !c.returnable || from_zone == "SCRAP_YARD" { return Ok(()); }
@@ -163,6 +165,8 @@ pub async fn adjust(State(s): State<AppState>, user: AuthUser, Q(dq): Q<DryQ>, J
     let id = Uuid::new_v4();
     let note = match code { Some(c) => format!("[{c}] {reason}"), None => reason.clone() };
     let after = stock::post(&mut tx, &Move::new(ctx.kind.it(), ctx.id, zone, lot, delta, "ADJUST").at(loc).reference("ADJUSTMENT", id).by(Some(user.id)).note(note).expiry(expiry), Uuid::new_v4()).await?;
+    // containers that vanish from a jar zone leave the fleet: record it (a surplus is NOT a purchase, so it writes nothing)
+    if ctx.returnable && is_jar_zone(zone) && delta < Decimal::ZERO { fleet_destroyed(&mut tx, loc, &ctx, zone, -delta, "OTHER", "adjustment", &user).await?; }
     if dry { return finish_dry(tx, "ADJUSTMENT", id, &warnings).await; }
     audit::log(&mut *tx, Some(&user), "STOCK_ADJUST", "stock", Some(id.to_string()),
         json!({ "location_id": loc, "item_type": ctx.kind.it().as_str(), "item_id": ctx.id, "item": ctx.name, "zone": zone, "lot_id": lot, "delta": delta.to_string(), "reason": reason, "reason_code": code })).await;
@@ -463,6 +467,7 @@ pub async fn count_post(State(s): State<AppState>, user: AuthUser, Id(id): Id, Q
     let mut uncounted = 0;
     let mut changed = 0;
     let mut surplus: std::collections::HashMap<Uuid, Decimal> = std::collections::HashMap::new();
+    let mut fleet_losses: Vec<(Uuid, Decimal)> = vec![];
     for l in &lines {
         let Some(counted) = l.get::<Option<Decimal>, _>("counted_qty") else { uncounted += 1; continue; };
         let kind = if l.get::<String, _>("item_type") == "RAW" { ItemKind::Raw } else { ItemKind::Product };
@@ -490,6 +495,8 @@ pub async fn count_post(State(s): State<AppState>, user: AuthUser, Id(id): Id, Q
         if reserved > Decimal::ZERO && counted < reserved { return Err(bh::reserved_error(&mut tx, loc, lot, reserved).await); }
         if warnings.len() < 12 { warnings.push(format!("{name}: {} -> {} ({}{})", cur.normalize(), counted.normalize(), if delta > Decimal::ZERO { "+" } else { "" }, delta.normalize())); }
         let kind_it: ItemType = kind.it();
+        // jar zones only ever hold RETURNABLE containers: a negative variance means containers left the fleet
+        if kind == ItemKind::Product && is_jar_zone(zone) && delta < Decimal::ZERO { fleet_losses.push((item, -delta)); }
         moves.push(Move::new(kind_it, item, zone, lot, delta, "ADJUST").at(loc).reference("COUNT", id).by(Some(user.id)).note(format!("stock count {cnt_no}")));
     }
     let mut head = vec![format!("Posting {cnt_no} changes {changed} stock line(s) in {zone}; this cannot be undone")];
@@ -498,6 +505,10 @@ pub async fn count_post(State(s): State<AppState>, user: AuthUser, Id(id): Id, Q
     let warnings = head;
     bh::need_confirm(&warnings, req.confirm, dry, "Posting a stock count is irreversible - please confirm")?;
     stock::post_all(&mut tx, moves).await?;
+    for (item, qty) in &fleet_losses {
+        let ctx = ItemCtx { kind: ItemKind::Product, id: *item, name: String::new(), returnable: true };
+        fleet_destroyed(&mut tx, loc, &ctx, zone, *qty, "OTHER", &format!("stock count {cnt_no}"), &user).await?;
+    }
     if dry { return finish_dry(tx, "COUNT", id, &warnings).await; }
     sqlx::query("UPDATE stock_counts SET status='POSTED', posted_by=$2, posted_at=now() WHERE id=$1").bind(id).bind(user.id).execute(&mut *tx).await?;
     audit::log(&mut *tx, Some(&user), "COUNT_POST", "stock_count", Some(id.to_string()), json!({ "cnt_no": cnt_no, "zone": zone, "adjusted_lines": changed, "uncounted": uncounted })).await;
