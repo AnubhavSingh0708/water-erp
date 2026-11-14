@@ -75,7 +75,7 @@ async function mountTrips(host, ctx) {
   const sub = g.currentName() ? `Loading from ${g.currentName()}` : 'Loading trips';
   const qrBanner = ctx.pendingQr && ctx.qrOn() ? el('div.banner.info.inline', {}, icon('qr'), el('div.grow', {}, el('b', { text: `Label ${ctx.pendingQr} scanned` }), el('div.small', { style: { fontWeight: 500 }, text: 'Open the trip you are loading to add it.' })),
     el('button.btn.ghost.sm', { type: 'button', on: { click: () => { ctx.pendingQr = null; qrBanner.remove(); } } }, 'Dismiss')) : null;
-  host.append(el('div.page-head', {}, el('div', {}, el('p.sub', { text: sub })), el('div.actions', {}, newBtn)), qrBanner, statsEl, seg.el, listEl);
+  ui.append(host, [el('div.page-head', {}, el('div', {}, el('p.sub', { text: sub })), el('div.actions', {}, newBtn)), qrBanner, statsEl, seg.el, listEl]);
 
   async function paintStats() {
     try {
