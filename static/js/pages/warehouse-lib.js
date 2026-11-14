@@ -501,3 +501,20 @@ export const TXN_LABEL = {
   TRIP_RETURN: 'Returned from trip', TRIP_DAMAGED: 'Damaged on trip', JAR_PURCHASE: 'New jars bought', JAR_WASH: 'Jars washed', JAR_RECEIVE: 'Empty jars received',
 };
 export const txnLabel = (t) => TXN_LABEL[t] || String(t || '').replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
+
+/** Dry run -> review -> real POST for actions that are not inside a form (cancel, void). Errors open an error dialog. */
+export async function dialogFlow({ flow, button, path, body, title, confirmText, danger = false, summary, units, sendConfirm = true }) {
+  const sig = JSON.stringify([path, body]);
+  try {
+    let warnings = [];
+    if (flow.retrySig !== sig) {
+      const d = await api.busy(button, () => api.dryRun(path, body));
+      const ok = await ui.reviewSheet({ title, effects: prepEffects(d.effects, units || await unitMap().catch(() => null)), warnings: d.warnings || [], confirmText, danger, summary });
+      if (!ok) return null;
+      warnings = d.warnings || [];
+    }
+    const payload = sendConfirm && (warnings.length || flow.retrySig === sig) ? { ...body, confirm: true } : body;
+    try { const r = await api.busy(button, () => flow.act.postConfirm(path, payload)); flow.retrySig = null; return r; }
+    catch (e) { if (e && e.network) flow.retrySig = sig; throw e; }
+  } catch (e) { errorDialog(e, 'Not saved'); return null; }
+}
