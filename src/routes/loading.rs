@@ -1,4 +1,4 @@
-//! `/api/loading/*` (page `loading`): availability, trips, bulk items, gate pass, settlement, dispatch notes, gate-pass void.
+//! `/api/loading/*` (page `loading`): availability, trips, bulk items, gate pass, settlement (+ per-customer deliveries), dispatch notes, gate-pass void, counter returns.
 //! Submodules live in `src/routes/loading/`. Lock order everywhere: trip -> batch rows (canonical order) -> stock rows -> customers' jar rows.
 use crate::state::AppState;
 use axum::{
@@ -7,6 +7,7 @@ use axum::{
 };
 
 pub(crate) mod common;
+mod deliveries;
 mod dispatch;
 mod gate;
 mod settle;
@@ -24,6 +25,8 @@ pub fn router() -> Router<AppState> {
         .route("/trips/{id}/gate-pass", get(gate::print).post(gate::issue))
         .route("/trips/{id}/settle", post(settle::settle))
         .route("/trips/{id}/void", post(gate::void))
+        .route("/deliveries", get(deliveries::list))
+        .route("/deliveries/summary", get(deliveries::summary))
         .route("/dispatches", get(dispatch::list).post(dispatch::create))
         .route("/dispatches/{id}", get(dispatch::get))
         .route("/dispatches/{id}/void", post(dispatch::void))

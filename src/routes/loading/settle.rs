@@ -38,12 +38,23 @@ pub struct JarLine {
     #[serde(default, deserialize_with = "de_i64")] lost: i64,
 }
 
+/// Share of the delivered crates of one non-returnable product that went to one customer (informational split, no stock effect).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeliveryLine {
+    customer_id: Uuid,
+    product_id: Uuid,
+    #[serde(deserialize_with = "de_i64")] crates: i64,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SettleBody {
     items: Vec<SettleItem>,
     #[serde(default)]
     customer_jars: Vec<JarLine>,
+    #[serde(default)]
+    customer_deliveries: Vec<DeliveryLine>,
     #[serde(default)]
     confirm: bool,
 }
@@ -63,6 +74,7 @@ async fn settle_core(tx: &mut sqlx::PgConnection, st: &AppState, user: &AuthUser
     let trip = lock_trip_for(tx, user, trip_id).await?; // authorisation (godown) before body validation
     validate::max_items("items", b.items.len(), 1000)?;
     if b.customer_jars.len() > 500 { return Err(AppError::field("customer_jars", "at most 500 entries allowed")); }
+    if b.customer_deliveries.len() > 200 { return Err(AppError::field("customer_deliveries", "at most 200 entries allowed")); }
     if trip.status != "DISPATCHED" {
         return Err(invalid_state(format!("Trip {} is {} - only a DISPATCHED trip can be settled", trip.trip_no, trip.status), &trip.status));
     }
@@ -121,14 +133,52 @@ async fn settle_core(tx: &mut sqlx::PgConnection, st: &AppState, user: &AuthUser
         }
     }
     if !errs.is_empty() { return Err(validation(errs)); }
-    let cust_ids: Vec<Uuid> = { let mut v: Vec<Uuid> = b.customer_jars.iter().map(|l| l.customer_id).collect(); v.sort(); v.dedup(); v };
+
+    // per-customer deliveries of non-returnable products: informational split of what was delivered (the rest stays "unassigned")
+    let mut plain_delivered: BTreeMap<Uuid, i64> = BTreeMap::new();
+    for it in &items { if it.kind != "RETURNABLE" { *plain_delivered.entry(it.product_id).or_default() += req[&it.id].0; } }
+    let mut del_sum: HashMap<Uuid, i64> = HashMap::new();
+    let mut seen_del: HashSet<(Uuid, Uuid)> = HashSet::new();
+    for (i, l) in b.customer_deliveries.iter().enumerate() {
+        if ret_delivered.contains_key(&l.product_id) {
+            errs.push((format!("customer_deliveries[{i}].product_id"), "returnable containers are assigned to customers with customer_jars, not customer_deliveries".into()));
+            continue;
+        }
+        if !plain_delivered.contains_key(&l.product_id) {
+            errs.push((format!("customer_deliveries[{i}].product_id"), "is not a product of this trip".into()));
+            continue;
+        }
+        if !seen_del.insert((l.customer_id, l.product_id)) {
+            errs.push((format!("customer_deliveries[{i}]"), "this customer/product pair is listed more than once - combine the quantities into one line".into()));
+        }
+        if !(1..=MAX).contains(&l.crates) {
+            errs.push((format!("customer_deliveries[{i}].crates"), "must be a whole number between 1 and 1,000,000".into()));
+        }
+        *del_sum.entry(l.product_id).or_default() += l.crates.clamp(0, MAX);
+    }
+    for (pid, sum) in &del_sum {
+        let delivered = plain_delivered.get(pid).copied().unwrap_or(0);
+        if *sum > delivered {
+            errs.push((format!("customer_deliveries.{pid}"), format!("{sum} crates of {} are assigned to customers but only {delivered} were delivered on this trip",
+                prod_name.get(pid).cloned().unwrap_or_default())));
+        }
+    }
+    if !errs.is_empty() { return Err(validation(errs)); }
+
+    let all_cust: Vec<Uuid> = {
+        let mut v: Vec<Uuid> = b.customer_jars.iter().map(|l| l.customer_id).chain(b.customer_deliveries.iter().map(|l| l.customer_id)).collect();
+        v.sort(); v.dedup(); v
+    };
     let mut cust_name: HashMap<Uuid, String> = HashMap::new();
-    if !cust_ids.is_empty() {
+    if !all_cust.is_empty() {
         let rows: Vec<(Uuid, String, bool)> = sqlx::query_as("SELECT id, name, is_active FROM customers WHERE id = ANY($1)")
-            .bind(&cust_ids).fetch_all(&mut *tx).await?;
+            .bind(&all_cust).fetch_all(&mut *tx).await?;
         for (id, name, active) in rows { if active { cust_name.insert(id, name); } }
         for (i, l) in b.customer_jars.iter().enumerate() {
             if !cust_name.contains_key(&l.customer_id) { errs.push((format!("customer_jars[{i}].customer_id"), "unknown or inactive customer".into())); }
+        }
+        for (i, l) in b.customer_deliveries.iter().enumerate() {
+            if !cust_name.contains_key(&l.customer_id) { errs.push((format!("customer_deliveries[{i}].customer_id"), "unknown or inactive customer".into())); }
         }
         if !errs.is_empty() { return Err(validation(errs)); }
     }
@@ -186,8 +236,18 @@ async fn settle_core(tx: &mut sqlx::PgConnection, st: &AppState, user: &AuthUser
     post_moves(tx, moves, &labels, fx).await?;
 
     // customers last in the lock order (trip -> batches -> stock -> customers): lock their rows (sorted), then check the holdings
-    if !cust_ids.is_empty() {
-        sqlx::query("SELECT id FROM customers WHERE id = ANY($1) ORDER BY id FOR UPDATE").bind(&cust_ids).fetch_all(&mut *tx).await?;
+    if !all_cust.is_empty() {
+        // the locked rows are re-read at their latest committed version: a customer deactivated while we waited is refused here
+        let locked: Vec<(Uuid, bool)> = sqlx::query_as("SELECT id, is_active FROM customers WHERE id = ANY($1) ORDER BY id FOR UPDATE")
+            .bind(&all_cust).fetch_all(&mut *tx).await?;
+        let inactive: HashSet<Uuid> = locked.iter().filter(|(_, a)| !*a).map(|(i, _)| *i).collect();
+        for (i, l) in b.customer_jars.iter().enumerate() {
+            if inactive.contains(&l.customer_id) { errs.push((format!("customer_jars[{i}].customer_id"), "unknown or inactive customer".into())); }
+        }
+        for (i, l) in b.customer_deliveries.iter().enumerate() {
+            if inactive.contains(&l.customer_id) { errs.push((format!("customer_deliveries[{i}].customer_id"), "unknown or inactive customer".into())); }
+        }
+        if !errs.is_empty() { return Err(validation(errs)); }
     }
     let mut ledger_rows: Vec<(Uuid, Uuid, &'static str, i64)> = vec![];
     for l in &b.customer_jars {
@@ -209,6 +269,19 @@ async fn settle_core(tx: &mut sqlx::PgConnection, st: &AppState, user: &AuthUser
         sqlx::query("INSERT INTO jar_ledger (customer_id, product_id, txn_type, delta, txn_date, trip_id, note, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)")
             .bind(cust).bind(prod).bind(*t).bind(*d as i32).bind(today).bind(trip_id).bind(format!("trip {}", trip.trip_no)).bind(user.id)
             .execute(&mut *tx).await?;
+    }
+    // per-customer deliveries (bottled goods): rows only, stock is not touched (delivered crates already left at the gate pass)
+    for l in &b.customer_deliveries {
+        sqlx::query("INSERT INTO trip_customer_deliveries (trip_id, customer_id, product_id, crates) VALUES ($1,$2,$3,$4)")
+            .bind(trip_id).bind(l.customer_id).bind(l.product_id).bind(l.crates as i32).execute(&mut *tx).await?;
+        fx.effects.push(json!({ "item": format!("{} · {} (delivered to customer)", cust_name[&l.customer_id], prod_name[&l.product_id]), "zone": "CUSTOMER",
+            "delta": l.crates.to_string(), "after": l.crates.to_string(), "txn_type": "TRIP_DELIVERY" }));
+    }
+    if !b.customer_deliveries.is_empty() {
+        for (pid, delivered) in &plain_delivered {
+            let rest = delivered - del_sum.get(pid).copied().unwrap_or(0);
+            if rest > 0 { fx.warn(format!("{rest} crates of {} are not assigned to a customer (unassigned)", prod_name[pid])); }
+        }
     }
     // fleet lifecycle events (aggregate): damaged in the vehicle, damaged/lost at the customer
     for it in &items {
@@ -239,7 +312,8 @@ async fn settle_core(tx: &mut sqlx::PgConnection, st: &AppState, user: &AuthUser
     }).await?;
     audit::log(&mut *tx, Some(user), "TRIP_SETTLED", "loading_trip", Some(trip_id.to_string()),
         json!({ "trip_no": trip.trip_no, "loaded": tot_loaded, "delivered": tot_delivered, "returned": tot_returned, "damaged": tot_damaged,
-                "jar_lines": b.customer_jars.len(), "confirmed": b.confirm })).await;
+                "jar_lines": b.customer_jars.len(), "delivery_lines": b.customer_deliveries.len(),
+                "delivery_crates": b.customer_deliveries.iter().map(|l| l.crates).sum::<i64>(), "confirmed": b.confirm })).await;
     Ok(out)
 }
 
