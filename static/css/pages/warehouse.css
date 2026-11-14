@@ -85,6 +85,11 @@ button.stat:hover { border-color: var(--brand-300); box-shadow: var(--shadow); }
 .filters { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: end; margin-bottom: var(--s2); }
 .filters .field { flex: 1 1 9rem; min-width: 0; }
 .filters .btn { flex: none; }
+@media (min-width: 768px) {
+  .filters .field { flex: 0 1 15rem; }
+  .tab-panel .tbl td.k, .tabbed + .tbl td.k { min-width: 11rem; }
+  .tab-panel .toolbar-end { margin-left: auto; }
+}
 .seg-row { overflow-x: auto; }
 .section-sub { color: var(--ink-3); font-size: var(--fs-sm); margin: -4px 0 0; }
 .stale-note { display: flex; gap: 6px; align-items: center; margin: 0 0 var(--s2); }
