@@ -29,3 +29,7 @@ Files: `static/{loading,jars,maintenance,qr-labels}.html`, `static/css/pages/{lo
 * Camera scanning was verified with Chromium's fake camera (jsQR fallback path starts, frames run, stream stops on close); decoding a real sticker and the torch constraint need a phone.
 * Ledger drawer in jars shows 30 rows at a time ("Show older"); no CSV export on these pages.
 * `window.print()` output was verified through `page.pdf()` (A4) and print media emulation, not on physical thermal printers.
+
+## Test residue (dev DB only)
+* Verification created the demo user `load_north` (loading+dashboard, North godown only); `features.qr_labels` was switched back to off. RESERVED_STOCK is handled in `explain()` but no E1 page can trigger it (write-offs live in Warehouse); CAPACITY_EXCEEDED is normally pre-empted by the client check (server dialog still wired).
+* Thermal printing injects `@page { size: 80mm 297mm }` while printing (named `@page` did not take in Chromium PDF); the 80 mm layout hides Expiry/Bottles columns.
