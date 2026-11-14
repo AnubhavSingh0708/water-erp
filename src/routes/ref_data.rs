@@ -81,8 +81,16 @@ async fn settings(State(s): State<AppState>) -> Json<Value> {
 }
 
 /// Active selectable godowns the caller may use (TRANSIT is a system location and never listed).
-async fn locations(State(s): State<AppState>, user: AuthUser) -> AppResult<Json<Value>> {
+/// `?all=1` returns ONLY id/code/name/kind of every active godown (no contact details) so a user restricted to
+/// some godowns can still pick a *destination* for an inter-godown transfer. Their own access rules still apply when they act.
+async fn locations(State(s): State<AppState>, user: AuthUser, axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>) -> AppResult<Json<Value>> {
     let mut c = s.db.acquire().await?;
+    if matches!(q.get("all").map(String::as_str), Some("1") | Some("true")) {
+        return Ok(Json(jval(&mut *c,
+            "SELECT COALESCE(jsonb_agg(j ORDER BY n), '[]'::jsonb) FROM (
+               SELECT jsonb_build_object('id', l.id, 'code', l.code, 'name', l.name, 'kind', l.kind) AS j, l.name AS n
+               FROM locations l WHERE l.is_active AND l.kind <> 'TRANSIT' ORDER BY l.name LIMIT 500) t", &[]).await?));
+    }
     let allowed = bh::allowed_locations(&mut c, &user).await?;
     Ok(Json(jval(&mut *c,
         "SELECT COALESCE(jsonb_agg(j ORDER BY n), '[]'::jsonb) FROM (

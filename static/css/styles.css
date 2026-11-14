@@ -501,7 +501,7 @@ a.badge { text-decoration: none; min-height: 44px; padding: 0 14px 0 10px; font-
 }
 .toast .i { margin-top: 1px; } .toast.ok .i { color: #7be0a4; } .toast.err .i { color: #ff9b92; } .toast.warn .i { color: #ffd16b; }
 .toast .t-body { flex: 1; min-width: 0; } .toast .t-body small { display: block; font-weight: 500; opacity: .85; margin-top: 2px; }
-.toast button { background: none; border: 0; color: #9fe3ee; font-weight: 800; cursor: pointer; min-height: 32px; padding: 0 6px; }
+.toast button { background: none; border: 0; color: #9fe3ee; font-weight: 800; cursor: pointer; min-height: 44px; min-width: 44px; padding: 0 8px; }
 .toast.leaving { opacity: 0; transform: translateY(8px); transition: all .2s; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 @media (min-width: 1024px) { .toasts { bottom: 20px; align-items: flex-end; padding-right: 24px; } }
