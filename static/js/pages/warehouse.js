@@ -126,9 +126,13 @@ function mountLedger(panel) {
   const csv = L.btn('CSV', 'download', { kind: 'secondary', sm: true, onClick: () => L.guarded(csv, () => api.download('/api/warehouse/ledger', { query: { format: 'csv', ...query() } })) });
   const clear = L.btn('Clear filters', 'x', { kind: 'ghost', sm: true, onClick: () => { [item, zone, txn, from, to].forEach((f) => f.set('')); apply(); } });
   const fCount = el('span.count-pill', { hidden: true });
-  const box = ui.collapsible(el('span', {}, 'Filters ', fCount), el('div.stack.tight', {}, el('div.filters.grid2', {}, item.el, zone.el, txn.el, from.el, to.el), el('div.btn-row.end', {}, clear)), { open: window.matchMedia('(min-width: 768px)').matches });
-  box.classList.add('filter-box');
-  panel.append(box, el('div.btn-row.end', {}, csv), host);
+  const wide = window.matchMedia('(min-width: 768px)').matches;
+  const fields = el('div.filters.grid2', {}, item.el, zone.el, txn.el, from.el, to.el);
+  if (wide) panel.append(el('div.filter-box', {}, fields), el('div.btn-row.end', {}, clear, csv), host);   // desktop: filters always visible
+  else {                                                                                                     // phone: one tidy "Filters (n)" row
+    const box = ui.collapsible(el('span', {}, 'Filters ', fCount), el('div.stack.tight', {}, fields, el('div.btn-row.end', {}, clear)));
+    box.classList.add('filter-box'); panel.append(box, el('div.btn-row.end', {}, csv), host);
+  }
   const apply = () => { st.item = item.get(); st.zone = zone.get(); st.txn = txn.get(); st.from = from.get(); st.to = to.get(); st.offset = 0; const n = [st.item, st.zone, st.txn, st.from, st.to].filter(Boolean).length; fCount.hidden = !n; fCount.textContent = String(n); load(); };
   [item, zone, txn, from, to].forEach((f) => f.input.addEventListener('change', apply));
   const query = () => { const [t, id] = st.item ? st.item.split(':') : ['', '']; return { ...L.readParam(), item_type: t, item_id: id, zone: st.zone, txn_type: st.txn, from: st.from, to: st.to }; };
