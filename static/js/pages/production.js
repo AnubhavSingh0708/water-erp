@@ -26,11 +26,11 @@ function waterStatusBanner(s) {
 }
 
 function mountWater(panel) {
-  const statusHost = el('div'); const histHost = el('div'); let offset = 0;
+  const statusHost = el('div'); const histHost = el('div.compact'); let offset = 0;
   const lim = LIM();
-  const tds = L.unitInput({ name: 'tds_ppm', label: 'TDS', unit: 'ppm', required: true, help: `Allowed ${lim.tdsMin} to ${lim.tdsMax} ppm.` });
-  const ph = L.unitInput({ name: 'ph', label: 'pH', unit: 'pH', required: true, help: `Allowed ${lim.phMin} to ${lim.phMax}.` });
-  const oz = L.unitInput({ name: 'ozone_ppm', label: 'Ozone', unit: 'ppm', help: 'Optional - residual ozone after the ozonator.' });
+  const tds = L.unitInput({ name: 'tds_ppm', label: 'TDS', unit: 'ppm', placeholder: 'e.g. 140', required: true, help: `Allowed ${lim.tdsMin} to ${lim.tdsMax} ppm.` });
+  const ph = L.unitInput({ name: 'ph', label: 'pH', unit: 'pH', placeholder: 'e.g. 7.2', required: true, help: `Allowed ${lim.phMin} to ${lim.phMax}.` });
+  const oz = L.unitInput({ name: 'ozone_ppm', label: 'Ozone', unit: 'ppm', placeholder: 'e.g. 0.3', help: 'Optional - residual ozone after the ozonator.' });
   const tdsChip = el('div.chip-row'); const phChip = el('div.chip-row');
   tds.el.insertBefore(tdsChip, tds.el.querySelector('.error')); ph.el.insertBefore(phChip, ph.el.querySelector('.error'));
   const uv = el('input', { type: 'checkbox', name: 'uv_ok', checked: true });

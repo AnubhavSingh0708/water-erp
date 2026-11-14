@@ -5,7 +5,7 @@ import { ERP } from '/js/shell.js';
 import * as L from '/js/pages/warehouse-lib.js';
 
 const { el, icon } = ui;
-const QC_FILTERS = [{ value: '', label: 'All' }, { value: 'QUARANTINE', label: 'Waiting for QC' }, { value: 'APPROVED', label: 'Approved' }, { value: 'REJECTED', label: 'Rejected' }];
+const QC_FILTERS = [{ value: '', label: 'All' }, { value: 'QUARANTINE', label: 'In QC' }, { value: 'APPROVED', label: 'Approved' }, { value: 'REJECTED', label: 'Rejected' }];
 const BASIS = { PER_CRATE: 'per crate', PER_1000L: 'per 1,000 L of water' };
 
 export function mountBatches(panel, ctx) {
@@ -22,7 +22,7 @@ export function mountBatches(panel, ctx) {
     const csv = L.btn('CSV', 'download', { kind: 'secondary', sm: true, onClick: () => L.guarded(csv, () => api.download('/api/production/batches', { query: { format: 'csv', qc_status: st.qc, q: st.q } })) });
     listHost = el('div');
     const sumHost = el('div');
-    const sum = ui.collapsible('Production summary - last 14 days', sumHost, { icon: 'dashboard' });
+    const sum = ui.collapsible('Last 14 days - production summary', sumHost, { icon: 'dashboard' });
     let sumLoaded = false;
     sum.addEventListener('toggle', () => { if (sum.open && !sumLoaded) { sumLoaded = true; loadSummary(sumHost); } });
     ui.mount(host, el('div.page-head', {}, el('div', {}, el('p.sub', { text: 'A batch turns bottles, caps, labels and minerals into crates waiting for Lab QC.' })), el('div.actions', {}, L.btn('New batch', 'plus', { onClick: () => showForm() }))),

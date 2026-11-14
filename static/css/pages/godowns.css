@@ -1,1 +1,3 @@
 /* godowns page styles (shared styles: warehouse.css) */
+.lines-empty { margin: 0; padding: var(--s4); text-align: center; color: var(--ink-3); border: 1.5px dashed var(--line-strong); border-radius: var(--r); background: var(--surface-2); }
+.lines-empty[hidden] { display: none; }

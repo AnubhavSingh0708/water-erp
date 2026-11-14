@@ -135,9 +135,9 @@ button.stat:hover { border-color: var(--brand-300); box-shadow: var(--shadow); }
 /* cards on phones: key column a little wider than the status chip; identifiers never break at their hyphens */
 @media (max-width: 767.98px) {
   .table-cards tr:has(> td.s) { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); }
-  .table-cards td.k b.nowrap { overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 }
 @media (max-width: 400px) {
+  .table-cards tr:has(> td.k > b.nowrap) > td.k { grid-column: 1 / -1; }
   .table-cards tr:has(> td.k > b.nowrap) > td.s { grid-column: 1 / -1; grid-row: 2; justify-self: start; }
 }
 /* a table card inside a card: flat divider rows instead of a card in a card */
@@ -165,3 +165,16 @@ button.stat:hover { border-color: var(--brand-300); box-shadow: var(--shadow); }
 @media (max-width: 767.98px) { .tap-hint { display: block; } }
 .filter-box { margin-bottom: var(--s2); }
 .filter-box .filters { margin-bottom: 0; }
+/* a list inside a card (no extra side padding) */
+@media (max-width: 767.98px) {
+  .flat .table-cards tbody { gap: 0; }
+  .flat .table-cards tr { border: 0; border-top: 1px solid var(--line); border-radius: 0; box-shadow: none; background: transparent; padding: var(--s3) 0; }
+  .flat .table-cards tbody tr:first-child { border-top: 0; padding-top: 0; }
+}
+details.collapse > summary > .row { flex-wrap: nowrap; min-width: 0; }
+details.collapse[open] > summary > .row .i { transform: none; }
+details.collapse > summary > .row .i { color: var(--brand-600); }
+.seg-row .seg { flex-wrap: nowrap; }
+.seg-row .seg button { white-space: nowrap; }
+.id-head { align-items: flex-start; gap: var(--s2) var(--s3); }
+.id-head h2 { white-space: nowrap; }

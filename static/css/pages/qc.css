@@ -8,3 +8,4 @@
 @media (min-width: 768px) { .qc-actions .btn.primary { flex: 0 0 auto; min-width: 14rem; } .qc-actions .btn { flex: 0 0 auto; } .qc-actions .qc-note { text-align: right; } }
 .field .seg { width: 100%; }
 .field .seg button { flex: 1 1 0; }
+#qc-test-form .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3); }

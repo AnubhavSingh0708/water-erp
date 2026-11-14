@@ -16,9 +16,10 @@ const refreshers = {};
 /* ---------------------------------------------------------------------------------------------- list */
 function ageBadge(mins) {
   const m = Number(mins);
-  if (m >= 480) return ui.badge('OVERDUE', `Waiting ${ui.fmtMinutes(m)}`);
-  if (m >= 120) return ui.badge('DUE_SOON', `Waiting ${ui.fmtMinutes(m)}`);
-  return el('span.small.muted', { text: `Waiting ${ui.fmtMinutes(m)}` });
+  const t = m >= 600 && m < 1440 ? `${Math.floor(m / 60)} h` : ui.fmtMinutes(m);   // "15 h" once it is a long wait, "5 h 42 min" while it is short
+  if (m >= 480) return ui.badge('OVERDUE', `Waiting ${t}`);
+  if (m >= 120) return ui.badge('DUE_SOON', `Waiting ${t}`);
+  return el('span.small.muted', { text: `Waiting ${t}` });
 }
 const testBadge = (r) => (r === 'PASS' ? ui.badge('PASS', 'Test passed') : r === 'FAIL' ? ui.badge('FAIL', 'Test failed') : el('span.chip-s', { text: 'No test yet' }));
 
@@ -122,13 +123,13 @@ async function showDetail(id) {
   [micro, seal, labl].forEach((x) => { x.seg.el.addEventListener('click', () => setTimeout(paintHints, 0)); });
 
   const approveBtn = L.btn('Approve batch', 'check-circle', { kind: 'primary', cls: 'xl', onClick: () => approve() });
-  const rejectBtn = L.btn('Reject batch', 'x-circle', { kind: 'danger outline', cls: 'xl', onClick: () => reject() });
+  const rejectBtn = L.btn('Reject', 'x-circle', { kind: 'danger outline', cls: 'xl', onClick: () => reject() });
   const decisionNote = el('p.small.muted.center');
   const decision = el('div.action-bar.qc-actions', {}, el('div.qc-note', {}, decisionNote), rejectBtn, approveBtn);
 
   function paint() {
     const ret = d.product && d.product.kind === 'RETURNABLE'; const decided = d.qc_status !== 'QUARANTINE';
-    ui.mount(headHost, el('div.card.stack.tight', {}, el('div.row.between', { style: { flexWrap: 'nowrap', alignItems: 'flex-start' } }, el('div', {}, el('h2', { text: d.batch_no }), el('div.muted', { text: d.product.name })), ui.badge(d.qc_status, d.qc_status === 'QUARANTINE' ? 'Waiting for QC' : undefined)),
+    ui.mount(headHost, el('div.card.stack.tight', {}, el('div.row.between.id-head', {}, el('div', {}, el('h2', { text: d.batch_no }), el('div.muted', { text: d.product.name })), ui.badge(d.qc_status, d.qc_status === 'QUARANTINE' ? 'Waiting for QC' : undefined)),
       L.kv([['Quantity', L.cratesCell(d.crates, d.product.crates_per_pallet, ret ? 'jars' : 'crates')], ['Made', `${ui.fmtDate(d.produced_on)} - ${d.shift.toLowerCase()} shift`], ['Expiry', ui.fmtDate(d.expiry_date)], ['Godown', d.location_name], ['Entered by', d.created_by_name], ['Production note', d.notes]])));
     ui.clear(bannerHost);
     if (decided) bannerHost.append(L.banner(d.qc_status === 'APPROVED' ? 'ok' : 'err', d.qc_status === 'APPROVED' ? 'check-circle' : 'x-circle',
