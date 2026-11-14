@@ -80,7 +80,7 @@
 .add-line { padding-top: var(--s3); border-top: 1px dashed var(--line); }
 
 /* printable documents */
-.gp-actions { display: flex; flex-wrap: wrap; gap: var(--s2); justify-content: space-between; align-items: center; }
+.gp-actions .btn-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); width: 100%; }
 .gp-doc { padding: var(--s4); }
 .gp-body { gap: var(--s4); }
 .gp-title { text-align: center; display: grid; gap: 2px; padding-bottom: var(--s3); border-bottom: 2px solid var(--ink); }
@@ -124,3 +124,4 @@
 .ld-notes:empty { display: none; }
 .ld-notes { margin-bottom: var(--s3); }
 .av-wrap .banner { border-radius: var(--r); }
+.settle-loaded { margin-top: 4px; padding: 4px 10px; background: var(--brand-50); border-radius: var(--r-sm); display: inline-block; }

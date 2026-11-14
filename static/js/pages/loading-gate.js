@@ -24,7 +24,7 @@ export function docFrame({ header, body, actions, banner, printTitle }) {
   const doc = el('article.card.gp-doc', {}, header, body);
   const a4 = el('button.btn.primary', { type: 'button', on: { click: () => printDoc(doc, { title: printTitle }) } }, el('span.btn-icon', {}, icon('print')), 'Print (A4)');
   const th = el('button.btn.secondary', { type: 'button', on: { click: () => printDoc(doc, { thermal: true, title: printTitle }) } }, icon('print'), 'Thermal slip (80 mm)');
-  const bar = el('div.no-print.gp-actions', {}, actions || null, el('div.btn-row', {}, a4, th));
+  const bar = el('div.no-print.gp-actions', {}, el('div.btn-row', {}, actions || null, a4, th));
   return { root: el('div.stack', {}, bar, banner || null, doc), doc };
 }
 

@@ -54,7 +54,7 @@ export function reviewDialog({ title = 'Review before saving', intro, before, af
   const rows = effects.filter((e) => e && (ui.toNum(e.delta) !== 0 || e.note)).map((e) => {
     const d = ui.toNum(e.delta);
     const zone = ZONE_LABEL[e.zone] || e.zone || '';
-    const sub = [zone, e.after !== undefined && e.after !== null && d !== 0 ? `then ${ui.fmtNum(e.after, 0)} left` : '', e.note].filter(Boolean).join(' - ');
+    const sub = [zone, e.after !== undefined && e.after !== null && d !== 0 ? `${ui.fmtNum(e.after, 0)} after` : '', e.note].filter(Boolean).join(' - ');
     return el('div.effect', {}, el('div.grow', {}, el('b', { text: e.item_name || e.item || '' }), el('small', { text: sub })),
       d !== 0 ? el('span.delta', { class: d < 0 ? 'neg' : 'pos' }, `${d > 0 ? '+' : '-'}${ui.fmtNum(Math.abs(d), 0)} ${unit}`) : null);
   });

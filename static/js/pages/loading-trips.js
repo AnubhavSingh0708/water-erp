@@ -143,7 +143,7 @@ export async function mountTrip(host, { id, ctx }) {
       ui.mount(info, el('div.stack.tight', {}, el('b.big', { text: r.product_name }), el('div.small.muted', { text: `${r.batch_no} - exp ${ui.fmtDate(r.expiry_date)}` }),
         el('div.row', {}, el('span', {}, 'Free now: ', el('b', {}, cratesNode(r.available, cpp))), el('span', {}, 'Vehicle room: ', el('b', { text: `${ui.fmtNum(room(), 0)} crates` }))),
         r.qc_status !== 'APPROVED' ? el('div.banner.warn.inline', {}, icon('alert'), el('div.grow', { text: 'Not approved by Lab QC yet. These crates would leave the plant before approval.' })) : null));
-      ui.mount(quick, [cpp ? quickBtn('+1 pallet', (q.value || 0) + cpp) : null, quickBtn('+10', (q.value || 0) + 10), quickBtn(`Fill vehicle (${Math.min(r.available, room())})`, Math.min(r.available, room())), r.available > room() ? null : quickBtn('All free', r.available)]);
+      ui.mount(quick, [cpp ? quickBtn('+1 pallet', (q.value || 0) + cpp) : null, quickBtn('+10', (q.value || 0) + 10), r.available > room() ? quickBtn(`Fill vehicle (${room()})`, room()) : quickBtn(`All free (${r.available})`, r.available)]);
       check();
     }
     function check() {

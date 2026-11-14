@@ -41,8 +41,8 @@ export async function mountSettle(host, { id, ctx }) {
     r.x = num(`items[${r.i}].damaged`, 'Damaged', '0', () => { autoD(r); update(); });
     r.check = el('div.settle-check', { role: 'status' });
     r.el = el('section.card.settle-item', { dataset: { item: it.id } },
-      el('div.row.between', { style: { flexWrap: 'nowrap' } }, el('div.grow', {}, el('b', { text: it.product_name }), el('div.small.muted', { text: `${it.batch_no} - exp ${ui.fmtDate(it.expiry_date)}` })),
-        el('div.right', {}, el('div.small.muted', { text: 'Loaded' }), el('b', {}, cratesNode(loaded, it.crates_per_pallet)))),
+      el('div', {}, el('b', { text: it.product_name }), el('div.small.muted', { text: `${it.batch_no} - exp ${ui.fmtDate(it.expiry_date)}` }),
+        el('div.settle-loaded', {}, 'Loaded: ', el('b', {}, cratesNode(loaded, it.crates_per_pallet)))),
       el('div.settle-grid', {}, r.d.el, r.r.el, r.x.el), r.check);
   });
   function autoD(r) { if (!r.auto) return; const v = r.it.crates - (int(r.r.get()) || 0) - (int(r.x.get()) || 0); r.d.set(String(Math.max(0, v))); }
@@ -92,7 +92,7 @@ export async function mountSettle(host, { id, ctx }) {
   function changed() { persistJars(); update(); }
 
   /* ------------------------------------------------------------ live arithmetic + summary */
-  let submitBtn = null;
+  let submitBtn = null; const noteEl = el('span.note');
   function update() {
     let allOk = true; let tl = 0, td = 0, tr = 0, tx = 0;
     rows.forEach((r) => {
@@ -112,7 +112,7 @@ export async function mountSettle(host, { id, ctx }) {
       warnPct && tx && pct > warnPct ? el('div.banner.warn.inline', {}, icon('alert'), el('div.grow', { text: `Damaged is ${pct}% of the load (limit ${warnPct}%). You will be asked to confirm.` })) : null);
     paintJarTotals();
     const jarsOk = jarState().every((s) => s.sumD === s.delivered) && lines.every((l) => l.f.c.get());
-    if (submitBtn) { submitBtn.disabled = !(allOk && jarsOk); document.getElementById('settle-note').textContent = allOk ? (jarsOk ? 'Everything adds up. Review and settle.' : 'Assign every delivered container to a customer.') : 'Each item must add up before you can settle.'; }
+    if (submitBtn) { submitBtn.disabled = !(allOk && jarsOk); noteEl.textContent = allOk ? (jarsOk ? 'Everything adds up. Review and settle.' : 'Assign every delivered container to a customer.') : 'Each item must add up before you can settle.'; }
   }
 
   /* ------------------------------------------------------------ build + draft */
@@ -125,7 +125,7 @@ export async function mountSettle(host, { id, ctx }) {
   renderJars();
 
   submitBtn = el('button.btn.primary', { type: 'submit', form: 'settle-form' }, el('span.btn-icon', {}, icon('check-circle')), 'Review and settle');
-  host.append(el('div.action-bar', {}, el('span.note#settle-note', { text: '' }), submitBtn));
+  host.append(el('div.action-bar', {}, noteEl, submitBtn));
   update();
 
   const act = api.action();
