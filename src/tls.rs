@@ -187,6 +187,9 @@ pub fn ensure_local_certs(dir: &Path, domain: Option<&str>) -> anyhow::Result<Lo
     p.is_ca = IsCa::ExplicitNoCa;
     p.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     p.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+    // RFC 5280: a leaf issued by a CA MUST carry the Authority Key Identifier; strict verifiers (Python 3.13 / OpenSSL strict mode,
+    // some Android versions) reject the chain otherwise ("Missing Authority Key Identifier").
+    p.use_authority_key_identifier_extension = true;
     p.subject_alt_names = sans.iter().map(|s| to_san(s)).collect::<anyhow::Result<Vec<_>>>()?;
     p.not_before = now - Duration::days(1);
     p.not_after = now + Duration::days(SERVER_DAYS);
