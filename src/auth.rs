@@ -21,7 +21,7 @@ pub const TOUCH_INTERVAL_SECS: i64 = 60;
 pub const COOKIE_NAME: &str = "erp_key";
 
 /// Every page key that may appear in `users.allowed_pages`. `admin` is implicit for admins.
-pub const PAGES: &[&str] = &["dashboard", "raw-materials", "production", "qc", "warehouse", "qr-labels", "loading", "jars", "maintenance", "admin"];
+pub const PAGES: &[&str] = &["dashboard", "raw-materials", "production", "qc", "warehouse", "qr-labels", "loading", "jars", "maintenance", "scan", "admin"];
 
 #[derive(Clone, Debug)]
 pub struct AuthUser {

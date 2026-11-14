@@ -41,8 +41,8 @@ const MAX_STREAMS_TOTAL: usize = 500;
 /// Which pages may see a topic. `None` = every logged-in user.
 pub fn topic_pages(topic: &str) -> Option<&'static [&'static str]> {
     Some(match topic {
-        "stock" => &["warehouse", "dashboard", "raw-materials", "production", "loading", "jars", "qr-labels"],
-        "materials" => &["raw-materials", "dashboard", "production"],
+        "stock" => &["warehouse", "dashboard", "raw-materials", "production", "loading", "jars", "qr-labels", "scan"],
+        "materials" => &["raw-materials", "dashboard", "production", "scan"],
         "production" => &["production", "dashboard", "qc", "qr-labels", "warehouse"],
         "qc" => &["qc", "production", "qr-labels", "loading", "dashboard"],
         "qr" => &["qr-labels", "loading"],
@@ -73,6 +73,7 @@ pub fn page_topics(page: &str) -> Option<&'static [&'static str]> {
         "jars"          => &["jars", "stock", "master", "alerts", "users"],
         "maintenance"   => &["maintenance", "alerts", "users"],
         "admin"         => &["admin", "settings", "users", "master", "alerts"],
+        "scan"          => &["stock", "materials", "master", "settings", "alerts", "users"],
         "profile"       => &["alerts", "users", "settings"],
         _ => return None,
     })

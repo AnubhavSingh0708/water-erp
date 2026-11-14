@@ -23,7 +23,8 @@ pub mod materials;  // B  /api/raw-materials/*
 pub mod notifications; // C /api/notifications/*
 pub mod production; // B  /api/production/*
 pub mod qc;         // B  /api/qc/*
-pub mod qr;         // C  /api/qr/*
+pub mod qr;
+pub mod scan;       // W4 /api/scan/*  (barcode scanning: receive / use)         // C  /api/qr/*
 pub mod ref_data;   // B  /api/ref/*
 pub mod warehouse;  // B  /api/warehouse/*
 
@@ -181,6 +182,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/api/qr", guarded(&["qr-labels", "loading"], qr::router().layer(middleware::from_fn_with_state(state.clone(), qr_feature_gate))))
         .nest("/api/loading", guarded(&["loading"], loading::router()))
         .nest("/api/jars", guarded(&["jars"], jars::router()))
+        .nest("/api/scan", guarded(&["scan"], scan::router()))
         .nest("/api/maintenance", guarded(&["maintenance"], maintenance::router()))
         .nest("/api/admin", admin::router().layer(middleware::from_fn(auth::admin_guard)))
         .layer(middleware::from_fn_with_state(state.clone(), idempotency))
