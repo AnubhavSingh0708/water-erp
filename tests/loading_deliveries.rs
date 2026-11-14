@@ -94,9 +94,11 @@ async fn settlement_records_deliveries_unassigned_and_reads_back(pool: PgPool) {
     assert_eq!(l["total"], 0);
     let (_, l) = c.get("/api/loading/deliveries?to=2000-01-01").await;
     assert_eq!(l["total"], 0);
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let (_, l) = c.get(&format!("/api/loading/deliveries?from={today}&to=2999-12-31")).await;
-    assert!(l["total"].as_i64().unwrap() == 3 || l["total"] == 0, "plant day may differ from the UTC day: {l}"); // tolerate the offset boundary
+    let today = (chrono::Utc::now() + chrono::Duration::minutes(c.st.settings.get().utc_offset_minutes as i64)).format("%Y-%m-%d").to_string();
+    let (_, l) = c.get(&format!("/api/loading/deliveries?from={today}&to={today}")).await;
+    assert_eq!(l["total"], 3, "settled today (plant date): {l}");
+    let (_, l) = c.get(&format!("/api/loading/deliveries?from={today}")).await;
+    assert_eq!(l["total"], 3);
     assert_eq!(c.get("/api/loading/deliveries?from=nope").await.0, StatusCode::BAD_REQUEST);
     let (_, sm) = c.get("/api/loading/deliveries/summary").await;
     assert_eq!(sm["total"], 2);
