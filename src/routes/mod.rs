@@ -58,6 +58,9 @@ async fn qr_feature_gate(State(s): State<AppState>, req: Request, next: Next) ->
 /// Idempotency for retried writes (weak Wi-Fi / double tap). Clients send `Idempotency-Key: <uuid>` on POST/PUT/PATCH/DELETE.
 /// Same user+key => the first response is replayed (`Idempotent-Replay: true`) and the handler is NOT run again.
 /// While the first request is still running a duplicate gets 409 IN_PROGRESS. 5xx responses are not stored (safe to retry).
+/// Minutes a key without a stored response (request cut off by the timeout, or the process died mid-request) stays reserved. See `idempotency`.
+pub const STALE_KEY_MINUTES: i64 = 10;
+
 pub async fn idempotency(State(s): State<AppState>, req: Request, next: Next) -> Result<Response, AppError> {
     if !matches!(*req.method(), Method::POST | Method::PUT | Method::PATCH | Method::DELETE) { return Ok(next.run(req).await); }
     let Some(key) = req.headers().get("idempotency-key").and_then(|v| v.to_str().ok()).map(str::to_owned) else { return Ok(next.run(req).await) };
@@ -80,14 +83,18 @@ pub async fn idempotency(State(s): State<AppState>, req: Request, next: Next) ->
         hex::encode(h.finalize())
     };
     let req = Request::from_parts(parts, axum::body::Body::from(body_bytes));
-    // take over keys abandoned by a crashed/timed-out request (30 s request timeout => 35 s)
-    sqlx::query("DELETE FROM idempotency_keys WHERE user_id=$1 AND key=$2 AND status IS NULL AND created_at < now() - interval '35 seconds'")
-        .bind(user).bind(&key).execute(&s.db).await?;
+    // A key whose request never finished (status NULL) is NOT freed after the 30 s request timeout: the timeout drops the handler's
+    // future at an arbitrary await point, which may be just after its transaction COMMITTED but before the key was updated. Re-running such a
+    // request would write twice, so a pending key is only taken over after `STALE_KEY_MINUTES` - far longer than any retry loop of a client,
+    // short enough that a really abandoned key (process killed mid-request) does not block that action for ever.
+    sqlx::query("DELETE FROM idempotency_keys WHERE user_id=$1 AND key=$2 AND status IS NULL AND created_at < now() - make_interval(mins => $3)")
+        .bind(user).bind(&key).bind(STALE_KEY_MINUTES as i32).execute(&s.db).await?;
     let inserted = sqlx::query("INSERT INTO idempotency_keys (user_id, key, method, path, fingerprint) VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING")
         .bind(user).bind(&key).bind(&method).bind(&path).bind(&fp).execute(&s.db).await?.rows_affected();
     if inserted == 0 {
-        let row: (String, Option<i32>, Option<Vec<u8>>) =
-            sqlx::query_as("SELECT fingerprint, status, body FROM idempotency_keys WHERE user_id=$1 AND key=$2").bind(user).bind(&key).fetch_one(&s.db).await?;
+        let row: (String, Option<i32>, Option<Vec<u8>>, f64) =
+            sqlx::query_as("SELECT fingerprint, status, body, EXTRACT(EPOCH FROM (now() - created_at))::float8 FROM idempotency_keys WHERE user_id=$1 AND key=$2")
+                .bind(user).bind(&key).fetch_one(&s.db).await?;
         if row.0 != fp { return Err(AppError::conflict("IDEMPOTENCY_CONFLICT", "Idempotency key was already used for a different request")); }
         return match (row.1, row.2) {
             (Some(st), Some(body)) => {
@@ -97,6 +104,9 @@ pub async fn idempotency(State(s): State<AppState>, req: Request, next: Next) ->
                 r.headers_mut().insert(HeaderName::from_static("idempotent-replay"), HeaderValue::from_static("true"));
                 Ok(r)
             }
+            // older than the request timeout and still unfinished: the first attempt timed out / was interrupted and its outcome is UNKNOWN
+            _ if row.3 > 35.0 => Err(AppError::conflict("IN_PROGRESS",
+                format!("An earlier attempt with this key timed out or was interrupted, so it is not known whether it was saved. Check the records before doing it again; this key is released after {STALE_KEY_MINUTES} minutes"))),
             _ => Err(AppError::conflict("IN_PROGRESS", "The same request is still being processed")),
         };
     }
@@ -106,21 +116,29 @@ pub async fn idempotency(State(s): State<AppState>, req: Request, next: Next) ->
     let resp = next.run(req).await;
     let (parts, body) = resp.into_parts();
     // The handler has already COMMITTED when we get here: a response that is merely large must never turn into a 500 (the client would
-    // retry and, once the 35 s "stale key" window passes, the write would run a second time).
+    // retry and, once the stale-key window passes, the write would run a second time).
     let bytes = axum::body::to_bytes(body, 64 * 1024 * 1024).await.map_err(|e| AppError::Internal(anyhow::anyhow!("idempotency body: {e}")))?;
-    if parts.status.is_success() {
+    // Finalise the key in a detached task: if the request timeout drops this future right after the handler committed, the key is still
+    // completed (replayable) instead of staying pending. A failure to remember the response is logged, never surfaced: the write is committed.
+    let ok = parts.status.is_success();
+    let status = parts.status.as_u16() as i32;
+    const MAX_STORED: usize = 512 * 1024;
+    let stored: Vec<u8> = if !ok { vec![] } else if bytes.len() <= MAX_STORED { bytes.to_vec() } else {
         // Responses over 512 KB are returned to the caller but stored as a small marker: a retry gets "already processed" instead of a re-run.
-        const MAX_STORED: usize = 512 * 1024;
-        let marker = br#"{"idempotent_replay_truncated":true,"message":"This request was already processed. Its response was too large to store - reload the page to see the result."}"#;
-        let stored: &[u8] = if bytes.len() <= MAX_STORED { bytes.as_ref() } else { marker };
-        sqlx::query("UPDATE idempotency_keys SET status=$3, body=$4 WHERE user_id=$1 AND key=$2")
-            .bind(user).bind(&key).bind(parts.status.as_u16() as i32).bind(stored).execute(&s.db).await
-            // the write is committed: report it even if remembering the response failed (the key then simply frees up after 35 s)
-            .map_err(|e| tracing::warn!(error = %e, "could not store idempotent response")).ok();
-    } else {
-        // only successes are replayed: validation errors, CONFIRM_REQUIRED, 5xx ... must be re-runnable with the same key
-        let _ = sqlx::query("DELETE FROM idempotency_keys WHERE user_id=$1 AND key=$2").bind(user).bind(&key).execute(&s.db).await;
-    }
+        br#"{"idempotent_replay_truncated":true,"message":"This request was already processed. Its response was too large to store - reload the page to see the result."}"#.to_vec()
+    };
+    let db = s.db.clone();
+    let finalise = tokio::spawn(async move {
+        if ok {
+            sqlx::query("UPDATE idempotency_keys SET status=$3, body=$4 WHERE user_id=$1 AND key=$2")
+                .bind(user).bind(&key).bind(status).bind(&stored).execute(&db).await
+                .map_err(|e| tracing::warn!(error = %e, "could not store idempotent response")).ok();
+        } else {
+            // only successes are replayed: validation errors, CONFIRM_REQUIRED, 5xx ... must be re-runnable with the same key
+            let _ = sqlx::query("DELETE FROM idempotency_keys WHERE user_id=$1 AND key=$2").bind(user).bind(&key).execute(&db).await;
+        }
+    });
+    let _ = finalise.await;
     Ok(Response::from_parts(parts, axum::body::Body::from(bytes)))
 }
 

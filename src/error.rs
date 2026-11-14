@@ -115,7 +115,7 @@ pub fn hint_for(code: &str) -> Option<&'static str> {
         "VEHICLE_DOCS_EXPIRED" => "Renew the vehicle document in Maintenance before issuing a gate pass.",
         "CONFIRM_REQUIRED" => "This entry looks unusual. Check the numbers, then confirm to continue.",
         "IDEMPOTENCY_CONFLICT" => "This request key was already used for a different action. Reload the page and try again.",
-        "IN_PROGRESS" => "The same action is still being processed. Wait a few seconds - do not submit again.",
+        "IN_PROGRESS" => "The same action is still being processed, or an earlier attempt timed out and may or may not have been saved. Do not submit it again: wait a few seconds, then check the list. The entry can only be repeated after 10 minutes.",
         "RETRY" => "Another user changed the same stock at the same moment. Simply try again.",
         "LOCKED" => "Too many attempts. Wait a few minutes and try again.",
         "UNAVAILABLE" => "Wait a moment and retry. Your entry was not saved. If it keeps happening, tell the administrator.",
