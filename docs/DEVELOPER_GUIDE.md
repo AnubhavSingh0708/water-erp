@@ -1,4 +1,4 @@
-# Developer Guide – Water Plant ERP
+# Developer Guide – Neersagar ERP
 
 Packaged mineral-water plant ERP: raw materials → blow molding → bottling → Lab QC → warehouse → loading/dispatch → jars/maintenance.
 **Out of scope on purpose:** GST/tax, invoicing, payments, accounting.
