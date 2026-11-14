@@ -130,6 +130,15 @@ One inventory, partitioned by location: `stock_balances` and `stock_ledger` carr
 * **Access**: a user restricted to godowns can neither read nor write other godowns' stock/docs (403 on explicit `location_id`; lists silently filter). Admin sees all.
 * **Realtime**: `godown_transfers`/lines → topic `stock`; `locations` → `master`.
 
+### G. QA amendments (pen-test pass)
+* **`?dry_run=`** has ONE definition everywhere (handlers and the idempotency middleware): present and not one of `0`, `false`, `no`, `off` (any case, percent-decoded). So `dry_run=1`, `true`, `yes`, `True`, a bare `?dry_run` and any unknown spelling are dry runs (fail safe); `dry_run=0` is a real, idempotent write. Dry runs never touch the idempotency store and leave no ledger, audit, alert, jar or fleet rows.
+* **Idempotency**: a committed 2xx whose body is larger than 512 KB is delivered in full, but replays answer `{"idempotent_replay_truncated":true,...}` (the handler never re-runs). Failing to remember a response never turns a committed write into an error.
+* **QR sets are godown-scoped** (the batch's godown): read, sheet, lookup, SVG, search, create and delete answer `403` for a user who may not use that godown; `GET /qr/sets` silently filters.
+* **Products**: `kind` cannot change once batches, any stock row, customer jar holdings, fleet events, trip items or dispatch lines exist (409 `IN_USE`).
+* **Godowns**: deactivation is also refused (409 `IN_USE`, `details.open_trips`) while a trip of that godown is `LOADING` or `DISPATCHED`.
+* **Free text** (names, notes, reasons): control characters, bidi overrides (U+202A-E, U+2066-9) and U+FEFF are rejected (422); ZWJ/ZWNJ are allowed.
+* A numeric overflow in the database (NUMERIC(18,4)) answers `400 BAD_REQUEST`, never `500`.
+
 ### D. Operational endpoints
 `GET /api/health` → `200 {status:"ok",db,db_ms,version}` · `503 {status:"degraded"|"shutting_down"}`. Graceful shutdown (SIGTERM/Ctrl-C): health turns 503, SSE streams get `server_restarting`, in-flight requests finish (≤ 25 s), workers see `state.shutdown`, DB pool closes. Workers MUST `select!` on `state.shutdown.wait()` in their sleep.
 
