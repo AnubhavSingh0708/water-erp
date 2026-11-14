@@ -18,8 +18,8 @@ function mountOverview(panel) {
   const host = el('div'); panel.append(host);
   async function load() {
     await L.refreshInto(host, async () => {
-      const s = await api.get('/api/warehouse/stock/summary', L.readParam());
-      const gname = (id) => (ERP.godown.list.find((g) => g.id === id) || {}).name || 'Godown';
+      const [s] = await Promise.all([api.get('/api/warehouse/stock/summary', L.readParam()), L.loadAllLocations()]);
+      const gname = (id) => L.anyGodownName(id);
       const zoneTiles = (s.zones || []).map((z) => el('button.stat.zone-tile', { type: 'button', on: { click: () => ctx.goto('stock', { zone: z.zone }) }, 'aria-label': `${L.zoneLabel(z.zone)}: ${z.items} items. Open stock list` },
         el('div.s-label', { text: L.zoneLabel(z.zone) }), el('div.s-value', { text: ui.fmtNum(z.items, 0) }), el('div.s-sub', { text: z.items === 1 ? 'item here' : 'items here' })));
       const prods = (s.products || []).filter((p) => ['quarantine', 'fg_ready', 'scrap', 'jar_empty', 'jar_clean'].some((k) => ui.toNum(p[k]) > 0));

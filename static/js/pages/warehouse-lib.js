@@ -90,7 +90,27 @@ export function offlineNote(host, e) {
 /* ------------------------------------------------------------------------------------------------ godowns */
 export const gdn = godown;
 export const isAll = () => godown.current() === 'all';
-export const godownName = (id) => (godown.list.find((g) => g.id === id) || {}).name || (id === NIL_UUID ? '' : '');
+export const godownName = (id) => anyGodownName(id, '');
+/**
+ * Every active godown (id / code / name / kind) for transfer DESTINATIONS - `GET /api/ref/locations?all=1`.
+ * `godown.list` only holds the godowns the user may work in, so a restricted user would have nowhere to send goods.
+ * Falls back to the user's own list when the endpoint is missing or unreachable. Names of both ends of a transfer resolve through it too.
+ */
+let allLocs = null; let allLocsAt = 0;
+export async function loadAllLocations(force = false) {
+  if (allLocs && !force && Date.now() - allLocsAt < 5 * 60000) return allLocs;
+  try {
+    const rows = await api.get('/api/ref/locations', { all: 1 });
+    allLocs = (Array.isArray(rows) ? rows : []).filter((g) => g && g.id && g.id !== '00000000-0000-0000-0000-000000000002');
+    allLocsAt = Date.now();
+  } catch (e) { if (e && e.redirecting) throw e; if (!allLocs) allLocs = godown.list.slice(); }
+  return allLocs;
+}
+export const allLocations = () => allLocs || godown.list;
+export function anyGodownName(id, fallback = 'Godown') {
+  const g = (allLocs || []).find((x) => x.id === id) || godown.list.find((x) => x.id === id);
+  return (g && g.name) || fallback;
+}
 /** Query fragment for reads (may be 'all'). */
 export const readParam = () => godown.param();
 /** The concrete godown a write acts on: the selected one, else the first allowed (production flows: first production site). */
